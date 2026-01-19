@@ -130,6 +130,9 @@ export function ApprovalWorkflow({
     // Track which fields have been manually edited
     const [editedFields, setEditedFields] = useState<Set<keyof CustomsDeclaration>>(new Set())
 
+    // Track which issues have been explicitly approved/verified by the reviewer
+    const [approvedFields, setApprovedFields] = useState<Set<keyof CustomsDeclaration>>(new Set())
+
     // Track initial issues - computed once on mount and when compliance checks change
     // but NOT when editedData changes (so cards don't disappear while editing)
     const [initialIssues, setInitialIssues] = useState<ComplianceIssue[] | null>(null)
@@ -227,6 +230,37 @@ export function ApprovalWorkflow({
         setEditedFields(prev => new Set(prev).add(field))
     }
 
+    // Handle approving/verifying a field
+    const handleApproveField = (field: keyof CustomsDeclaration) => {
+        setApprovedFields(prev => new Set(prev).add(field))
+    }
+
+    // Check if an issue is resolved (either edited with value or explicitly approved)
+    const isIssueResolved = (issue: ComplianceIssue): boolean => {
+        const hasValue = !!editedData[issue.field]?.trim()
+        const wasEdited = editedFields.has(issue.field)
+        const wasApproved = approvedFields.has(issue.field)
+        return (wasEdited && hasValue) || wasApproved
+    }
+
+    // Calculate adjusted confidence based on human verification
+    const adjustedExtractionConfidence = useMemo(() => {
+        const totalFields = Object.keys(editedData).length
+        const verifiedFields = approvedFields.size + editedFields.size
+        // Blend original confidence with human verification boost
+        const verificationBoost = verifiedFields / totalFields
+        return Math.min(1, extractionConfidence + (verificationBoost * (1 - extractionConfidence)))
+    }, [extractionConfidence, approvedFields, editedFields, editedData])
+
+    const adjustedComplianceConfidence = useMemo(() => {
+        const totalIssues = issues.length
+        if (totalIssues === 0) return complianceConfidence
+        const resolvedIssues = issues.filter(i => isIssueResolved(i)).length
+        // Blend original confidence with resolution boost
+        const resolutionBoost = resolvedIssues / totalIssues
+        return Math.min(1, complianceConfidence + (resolutionBoost * (1 - complianceConfidence)))
+    }, [complianceConfidence, issues, approvedFields, editedFields, editedData])
+
     // Validation check
     const canApprove = useMemo(() => {
         // All required fields must have values
@@ -296,26 +330,36 @@ export function ApprovalWorkflow({
                     {/* Confidence Summary */}
                     <div className="grid grid-cols-2 gap-4 mb-4">
                         <div className="p-3 bg-background/50 rounded-lg">
-                            <div className="text-xs text-muted-foreground mb-1">Extraction Confidence</div>
+                            <div className="text-xs text-muted-foreground mb-1 flex items-center justify-between">
+                                <span>Extraction Confidence</span>
+                                {adjustedExtractionConfidence > extractionConfidence && (
+                                    <span className="text-success text-xs">+{((adjustedExtractionConfidence - extractionConfidence) * 100).toFixed(0)}%</span>
+                                )}
+                            </div>
                             <div className="flex items-center gap-2">
                                 <Progress
-                                    value={extractionConfidence * 100}
+                                    value={adjustedExtractionConfidence * 100}
                                     className="flex-1 h-2"
                                 />
-                                <span className={`text-sm font-medium ${extractionConfidence < 0.7 ? 'text-warning' : 'text-success'}`}>
-                                    {(extractionConfidence * 100).toFixed(0)}%
+                                <span className={`text-sm font-medium ${adjustedExtractionConfidence < 0.7 ? 'text-warning' : 'text-success'}`}>
+                                    {(adjustedExtractionConfidence * 100).toFixed(0)}%
                                 </span>
                             </div>
                         </div>
                         <div className="p-3 bg-background/50 rounded-lg">
-                            <div className="text-xs text-muted-foreground mb-1">Compliance Confidence</div>
+                            <div className="text-xs text-muted-foreground mb-1 flex items-center justify-between">
+                                <span>Compliance Confidence</span>
+                                {adjustedComplianceConfidence > complianceConfidence && (
+                                    <span className="text-success text-xs">+{((adjustedComplianceConfidence - complianceConfidence) * 100).toFixed(0)}%</span>
+                                )}
+                            </div>
                             <div className="flex items-center gap-2">
                                 <Progress
-                                    value={complianceConfidence * 100}
+                                    value={adjustedComplianceConfidence * 100}
                                     className="flex-1 h-2"
                                 />
-                                <span className={`text-sm font-medium ${complianceConfidence < 0.7 ? 'text-warning' : 'text-success'}`}>
-                                    {(complianceConfidence * 100).toFixed(0)}%
+                                <span className={`text-sm font-medium ${adjustedComplianceConfidence < 0.7 ? 'text-warning' : 'text-success'}`}>
+                                    {(adjustedComplianceConfidence * 100).toFixed(0)}%
                                 </span>
                             </div>
                         </div>
@@ -335,22 +379,24 @@ export function ApprovalWorkflow({
             {issues.length > 0 && (
                 <div className="space-y-3">
                     <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                        Issues Requiring Attention ({issues.filter(i => !editedFields.has(i.field) || !editedData[i.field]?.trim()).length} of {issues.length} remaining)
+                        Issues Requiring Attention ({issues.filter(i => !isIssueResolved(i)).length} of {issues.length} remaining)
                     </h3>
                     <div className="space-y-3">
                         {issues.map((issue, index) => {
-                            const isResolved = editedFields.has(issue.field) && editedData[issue.field]?.trim()
+                            const resolved = isIssueResolved(issue)
+                            const wasApproved = approvedFields.has(issue.field)
+                            const hasValue = editedData[issue.field]?.trim()
                             return (
-                                <Card 
-                                    key={`${issue.field}-${index}`} 
-                                    className={isResolved 
-                                        ? "border-success/30 bg-success/5" 
+                                <Card
+                                    key={`${issue.field}-${index}`}
+                                    className={resolved
+                                        ? "border-success/30 bg-success/5"
                                         : "border-warning/30 bg-warning/5"
                                     }
                                 >
                                     <div className="p-4">
                                         <div className="flex items-start gap-3">
-                                            {isResolved ? (
+                                            {resolved ? (
                                                 <CheckCircle size={20} className="text-success flex-shrink-0 mt-0.5" weight="fill" />
                                             ) : (
                                                 <Warning size={20} className="text-warning flex-shrink-0 mt-0.5" weight="fill" />
@@ -358,31 +404,56 @@ export function ApprovalWorkflow({
                                             <div className="flex-1 space-y-3">
                                                 <div className="flex items-start justify-between">
                                                     <div>
-                                                        <h4 className={`font-medium ${isResolved ? 'text-success' : 'text-foreground'}`}>
-                                                            {isResolved ? `✓ ${issue.title} - Resolved` : issue.title}
+                                                        <h4 className={`font-medium ${resolved ? 'text-success' : 'text-foreground'}`}>
+                                                            {resolved ? `✓ ${issue.title} - Verified` : issue.title}
                                                         </h4>
                                                         <p className="text-sm text-muted-foreground mt-1">{issue.description}</p>
                                                     </div>
-                                                    {isResolved && (
-                                                        <Badge variant="outline" className="text-success border-success text-xs">
-                                                            Corrected
-                                                        </Badge>
-                                                    )}
+                                                    <div className="flex items-center gap-2">
+                                                        {resolved ? (
+                                                            <Badge variant="outline" className="text-success border-success text-xs">
+                                                                {wasApproved ? 'Approved' : 'Corrected'}
+                                                            </Badge>
+                                                        ) : hasValue && (
+                                                            <Button
+                                                                size="sm"
+                                                                variant="outline"
+                                                                className="h-7 text-xs border-success text-success hover:bg-success hover:text-white"
+                                                                onClick={() => handleApproveField(issue.field)}
+                                                            >
+                                                                <CheckCircle size={14} className="mr-1" />
+                                                                Verify
+                                                            </Button>
+                                                        )}
+                                                    </div>
                                                 </div>
 
                                                 {/* Inline edit field */}
                                                 <div className="space-y-2">
                                                     <Label htmlFor={`issue-${index}`} className="text-sm">
                                                         {FIELD_LABELS[issue.field]}
-                                                        {issue.type === 'missing' && !isResolved && <span className="text-destructive ml-1">*</span>}
+                                                        {issue.type === 'missing' && !resolved && <span className="text-destructive ml-1">*</span>}
                                                     </Label>
-                                                    <Input
-                                                        id={`issue-${index}`}
-                                                        value={editedData[issue.field]}
-                                                        onChange={(e) => handleFieldChange(issue.field, e.target.value)}
-                                                        placeholder={issue.hint}
-                                                        className={isResolved ? 'border-success' : !editedData[issue.field] ? 'border-warning' : ''}
-                                                    />
+                                                    <div className="flex gap-2">
+                                                        <Input
+                                                            id={`issue-${index}`}
+                                                            value={editedData[issue.field]}
+                                                            onChange={(e) => handleFieldChange(issue.field, e.target.value)}
+                                                            placeholder={issue.hint}
+                                                            className={`flex-1 ${resolved ? 'border-success' : !editedData[issue.field] ? 'border-warning' : ''}`}
+                                                        />
+                                                        {!resolved && hasValue && (
+                                                            <Button
+                                                                size="icon"
+                                                                variant="ghost"
+                                                                className="h-9 w-9 text-success hover:bg-success/10"
+                                                                onClick={() => handleApproveField(issue.field)}
+                                                                title="Verify this value is correct"
+                                                            >
+                                                                <CheckCircle size={18} weight="bold" />
+                                                            </Button>
+                                                        )}
+                                                    </div>
                                                     <p className="text-xs text-muted-foreground">{issue.hint}</p>
                                                 </div>
                                             </div>

@@ -340,6 +340,11 @@ function App() {
   const [rawDataWithConfidence, setRawDataWithConfidence] = useState<StructuredDataWithConfidence | null>(null)
   const [reviewerNotes, setReviewerNotes] = useState('')
   const [approvalStatus, setApprovalStatus] = useState<'pending' | 'approved' | 'draft'>('pending')
+  
+  // Automated workflow specific state
+  const [automatedStep, setAutomatedStep] = useState<'upload' | 'processing' | 'approval' | 'complete'>('upload')
+  const [processingStatus, setProcessingStatus] = useState<string>('')
+  const [processingSteps, setProcessingSteps] = useState<{step: string, status: 'pending' | 'active' | 'done' | 'error'}[]>([])
 
   useEffect(() => {
     checkAzureStatus().then(configured => {
@@ -398,6 +403,10 @@ function App() {
     setRawDataWithConfidence(null)
     setReviewerNotes('')
     setApprovalStatus('pending')
+    // Reset automated workflow state
+    setAutomatedStep('upload')
+    setProcessingStatus('')
+    setProcessingSteps([])
   }
 
   const handleModeChange = (mode: string) => {
@@ -405,7 +414,124 @@ function App() {
     resetWorkflow()
   }
 
+  // Automated workflow - single function that chains all steps
+  const runAutomatedWorkflow = async (file: File) => {
+    setAutomatedStep('processing')
+    setIsAutomatedRunning(true)
+    
+    const steps = [
+      { step: 'Uploading to Azure Storage', status: 'pending' as const },
+      { step: 'Extracting document content (OCR)', status: 'pending' as const },
+      { step: 'Transforming to customs fields', status: 'pending' as const },
+      { step: 'Running compliance checks', status: 'pending' as const },
+    ]
+    setProcessingSteps(steps)
+
+    try {
+      // Step 1: Upload to Azure Storage
+      setProcessingSteps(prev => prev.map((s, i) => i === 0 ? {...s, status: 'active'} : s))
+      setProcessingStatus('Uploading document to Azure Storage...')
+      
+      const fileUrl = URL.createObjectURL(file)
+      setDocument({
+        fileName: file.name,
+        fileUrl: fileUrl,
+        fileType: file.type,
+      })
+
+      const blobUrl = await uploadToAzureBlob(file)
+      setDocument(prev => prev ? { ...prev, blobUrl } : null)
+      setProcessingSteps(prev => prev.map((s, i) => i === 0 ? {...s, status: 'done'} : s))
+
+      // Step 2: OCR + Extraction
+      setProcessingSteps(prev => prev.map((s, i) => i === 1 ? {...s, status: 'active'} : s))
+      setProcessingStatus('Extracting document content with AI...')
+      
+      const urlToAnalyze = blobUrl || fileUrl
+      const { rawData, structuredData, ocrConfidence } = await analyzeDocumentWithAI(urlToAnalyze)
+      
+      const hasStructuredData = structuredData && Object.values(structuredData).some(field => field?.value)
+      if (structuredData) {
+        setRawDataWithConfidence(structuredData)
+      }
+
+      setProcessingSteps(prev => prev.map((s, i) => i === 1 ? {...s, status: 'done'} : s))
+
+      // Step 3: Transform to structured data
+      setProcessingSteps(prev => prev.map((s, i) => i === 2 ? {...s, status: 'active'} : s))
+      setProcessingStatus('Transforming to customs declaration fields...')
+      
+      let finalStructuredData: CustomsDeclaration
+      let structureConfidence: number
+      
+      if (hasStructuredData) {
+        finalStructuredData = extractValuesFromStructuredData(structuredData)
+        structureConfidence = ocrConfidence
+      } else {
+        const result = await transformToStructuredData(rawData)
+        finalStructuredData = result.structuredData
+        structureConfidence = result.structureConfidence
+      }
+
+      setDocument(prev => prev ? {
+        ...prev,
+        rawData,
+        structuredData: finalStructuredData,
+        confidenceScores: {
+          ocrConfidence,
+          structureConfidence,
+          complianceConfidence: 0,
+          overallConfidence: ocrConfidence,
+        },
+      } : null)
+      setEditedData(finalStructuredData)
+      setProcessingSteps(prev => prev.map((s, i) => i === 2 ? {...s, status: 'done'} : s))
+
+      // Step 4: Compliance Check
+      setProcessingSteps(prev => prev.map((s, i) => i === 3 ? {...s, status: 'active'} : s))
+      setProcessingStatus('Running compliance validation...')
+      
+      const { checks, complianceConfidence, issueDescriptions } = await performComplianceCheck(finalStructuredData)
+      setComplianceChecks(checks)
+      setComplianceDescriptions(issueDescriptions)
+      
+      setDocument(prev => prev ? {
+        ...prev,
+        confidenceScores: prev.confidenceScores ? {
+          ...prev.confidenceScores,
+          complianceConfidence,
+          overallConfidence: calculateOverallConfidence({
+            ...prev.confidenceScores,
+            complianceConfidence,
+          }),
+        } : undefined,
+      } : null)
+      
+      setProcessingSteps(prev => prev.map((s, i) => i === 3 ? {...s, status: 'done'} : s))
+      setProcessingStatus('Processing complete. Ready for review.')
+
+      // Brief pause then show approval
+      await new Promise(resolve => setTimeout(resolve, 800))
+      setAutomatedStep('approval')
+      setShowApproval(true)
+      toast.info('Document processed. Please review and approve.')
+
+    } catch (error) {
+      console.error('Automated workflow error:', error)
+      setProcessingStatus(`Error: ${error instanceof Error ? error.message : 'Processing failed'}`)
+      setProcessingSteps(prev => prev.map(s => s.status === 'active' ? {...s, status: 'error'} : s))
+      toast.error('Processing failed. Please try again.')
+    }
+  }
+
   const handleFileUpload = (file: File) => {
+    // In automated mode, use the streamlined workflow
+    if (workflowMode === 'automated') {
+      runAutomatedWorkflow(file)
+      return
+    }
+
+    // Manual mode - step by step
     setUploadProgress(0)
     updateStageStatus(0, 'processing')
 
@@ -421,10 +547,6 @@ function App() {
           })
           updateStageStatus(0, 'completed')
           advanceToStage(1)
-
-          if (workflowMode === 'automated' && isAutomatedRunning) {
-            setTimeout(() => handleStoreInAzure(file), 800)
-          }
           return 100
         }
         return prev + 10
@@ -647,8 +769,10 @@ function App() {
               advanceToStage(5)
               setShowApproval(true)
 
+              // In automated mode, STOP here for human approval
+              // Don't auto-approve - this is where human review is required
               if (workflowMode === 'automated' && isAutomatedRunning) {
-                setTimeout(() => handleApprove(), 1200)
+                toast.info('Automated workflow paused for human approval')
               }
             }, 300)
           }
@@ -661,7 +785,7 @@ function App() {
   }
 
   // New approval workflow handlers
-  const handleApprovalComplete = (data: CustomsDeclaration, notes: string) => {
+  const handleApprovalComplete = async (data: CustomsDeclaration, notes: string) => {
     // Update document with approved data
     if (document) {
       setDocument({
@@ -678,11 +802,25 @@ function App() {
     setReviewerNotes(notes)
     setApprovalStatus('approved')
     setShowApproval(false)
-    updateStageStatus(5, 'completed')
-    advanceToStage(6)
     toast.success('Declaration approved and locked')
 
-    if (workflowMode === 'automated' && isAutomatedRunning) {
+    // In automated mode, continue to submission
+    if (workflowMode === 'automated') {
+      setAutomatedStep('complete')
+      setProcessingStatus('Submitting to customs authority...')
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      setProcessingStatus('Storing in analytics...')
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      setProcessingStatus('Workflow complete!')
+      setIsAutomatedRunning(false)
+      toast.success('Document submitted and stored successfully!')
+      return
+    }
+
+    // Manual mode - continue with stages
+    updateStageStatus(5, 'completed')
+    advanceToStage(6)
+    if (isAutomatedRunning) {
       setTimeout(() => handleSubmitToCustoms(), 800)
     }
   }
@@ -700,7 +838,18 @@ function App() {
   const handleReturnToAutomation = (reason: string, comment: string) => {
     console.log('Returning to automation:', reason, comment)
     setShowApproval(false)
-    // Go back to OCR stage
+    
+    // In automated mode, go back to upload
+    if (workflowMode === 'automated') {
+      setAutomatedStep('upload')
+      setProcessingSteps([])
+      setProcessingStatus('')
+      setDocument(null)
+      toast.info(`Document returned: ${reason}. Please upload again.`)
+      return
+    }
+
+    // Manual mode - go back to OCR stage
     updateStageStatus(5, 'inactive')
     updateStageStatus(4, 'inactive')
     updateStageStatus(3, 'inactive')
@@ -765,24 +914,6 @@ function App() {
       updateStageStatus(7, 'completed')
       setIsAutomatedRunning(false)
     }, 1500)
-  }
-
-  const startAutomatedWorkflow = async () => {
-    if (document) {
-      resetWorkflow()
-      await new Promise(resolve => setTimeout(resolve, 500))
-    }
-
-    setIsAutomatedRunning(true)
-
-    const sampleImageBlob = await fetch('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAwIiBoZWlnaHQ9IjYwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iODAwIiBoZWlnaHQ9IjYwMCIgZmlsbD0iI2YzZjRmNiIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iMjQiIGZpbGw9IiM0YTVhNjgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj5DdXN0b21zIERlY2xhcmF0aW9uIERvY3VtZW50PC90ZXh0Pjwvc3ZnPg==').then(r => r.blob())
-    const sampleFile = new File([sampleImageBlob], 'sample-customs-doc.svg', { type: 'image/svg+xml' })
-
-    handleFileUpload(sampleFile)
-  }
-
-  const pauseAutomatedWorkflow = () => {
-    setIsAutomatedRunning(false)
   }
 
   const getStatusBadge = (status: StageStatus) => {
@@ -932,19 +1063,7 @@ function App() {
 
             {workflowMode === 'automated' && (
               <div className="flex gap-2">
-                {!isAutomatedRunning && currentStage < 7 && (
-                  <Button onClick={startAutomatedWorkflow} size="sm">
-                    <Play className="mr-2" size={16} />
-                    {document ? 'Resume' : 'Start'} Automated
-                  </Button>
-                )}
-                {isAutomatedRunning && (
-                  <Button onClick={pauseAutomatedWorkflow} size="sm" variant="outline">
-                    <Pause className="mr-2" size={16} />
-                    Pause
-                  </Button>
-                )}
-                {(document || currentStage > 0) && (
+                {(document || automatedStep !== 'upload') && (
                   <Button onClick={resetWorkflow} size="sm" variant="outline">
                     Reset
                   </Button>
@@ -963,6 +1082,148 @@ function App() {
 
       <main className="p-8">
         <div className="max-w-4xl mx-auto">
+          {/* Automated Workflow - Simplified View */}
+          {workflowMode === 'automated' && (
+            <div className="space-y-6">
+              {/* Upload Step */}
+              {automatedStep === 'upload' && (
+                <Card className="shadow-lg">
+                  <div className="p-8">
+                    <div className="text-center mb-6">
+                      <CloudArrowUp size={48} className="mx-auto mb-4 text-accent" weight="duotone" />
+                      <h2 className="text-2xl font-semibold mb-2">Upload Customs Document</h2>
+                      <p className="text-muted-foreground">
+                        Upload a customs declaration document to begin automated processing
+                      </p>
+                    </div>
+                    <div
+                      onDrop={handleDrop}
+                      onDragOver={(e) => {
+                        e.preventDefault()
+                        setIsDragging(true)
+                      }}
+                      onDragLeave={() => setIsDragging(false)}
+                      className={`border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-all ${isDragging
+                        ? 'border-accent bg-accent/10 scale-[1.02]'
+                        : 'border-border hover:border-accent/50 hover:bg-accent/5'
+                        }`}
+                      onClick={() => window.document.getElementById('auto-file-input')?.click()}
+                    >
+                      <CloudArrowUp size={64} className="mx-auto mb-4 text-muted-foreground" />
+                      <p className="text-lg font-medium mb-2">
+                        Drop your document here
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        or click to browse (PDF, PNG, JPG)
+                      </p>
+                      <input
+                        id="auto-file-input"
+                        type="file"
+                        accept="image/*,application/pdf"
+                        onChange={handleFileSelect}
+                        className="hidden"
+                      />
+                    </div>
+                  </div>
+                </Card>
+              )}
+
+              {/* Processing Step */}
+              {automatedStep === 'processing' && (
+                <Card className="shadow-lg">
+                  <div className="p-8">
+                    <div className="text-center mb-8">
+                      <div className="inline-block animate-spin mb-4">
+                        <ScanSmiley size={48} className="text-processing" weight="duotone" />
+                      </div>
+                      <h2 className="text-2xl font-semibold mb-2">Processing Document</h2>
+                      <p className="text-muted-foreground">{processingStatus}</p>
+                    </div>
+
+                    {/* Document Preview */}
+                    {document && (
+                      <div className="mb-8 flex justify-center">
+                        <div className="w-48 h-32 rounded-lg overflow-hidden border shadow-sm">
+                          <DocumentPreview doc={document} />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Processing Steps */}
+                    <div className="space-y-4 max-w-md mx-auto">
+                      {processingSteps.map((step, index) => (
+                        <div key={index} className="flex items-center gap-4">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                            step.status === 'done' ? 'bg-success text-white' :
+                            step.status === 'active' ? 'bg-processing text-white' :
+                            step.status === 'error' ? 'bg-destructive text-white' :
+                            'bg-muted text-muted-foreground'
+                          }`}>
+                            {step.status === 'done' ? (
+                              <CheckCircle size={18} weight="bold" />
+                            ) : step.status === 'active' ? (
+                              <Clock size={18} className="animate-spin" />
+                            ) : step.status === 'error' ? (
+                              <X size={18} weight="bold" />
+                            ) : (
+                              <span className="text-xs font-medium">{index + 1}</span>
+                            )}
+                          </div>
+                          <span className={`text-sm ${
+                            step.status === 'done' ? 'text-success font-medium' :
+                            step.status === 'active' ? 'text-processing font-medium' :
+                            step.status === 'error' ? 'text-destructive' :
+                            'text-muted-foreground'
+                          }`}>
+                            {step.step}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </Card>
+              )}
+
+              {/* Approval Step */}
+              {automatedStep === 'approval' && showApproval && (
+                <ApprovalWorkflow
+                  structuredData={document?.structuredData || mockStructuredData}
+                  rawDataWithConfidence={rawDataWithConfidence}
+                  complianceChecks={complianceChecks}
+                  complianceDescriptions={complianceDescriptions}
+                  extractionConfidence={document?.confidenceScores?.ocrConfidence || 0}
+                  complianceConfidence={document?.confidenceScores?.complianceConfidence || 0}
+                  onApprove={handleApprovalComplete}
+                  onSaveDraft={handleSaveDraft}
+                  onReturnToAutomation={handleReturnToAutomation}
+                  onCancel={() => {
+                    setShowApproval(false)
+                    setAutomatedStep('upload')
+                    resetWorkflow()
+                  }}
+                />
+              )}
+
+              {/* Complete Step */}
+              {automatedStep === 'complete' && (
+                <Card className="shadow-lg border-success/30">
+                  <div className="p-12 text-center">
+                    <CheckCircle size={64} className="mx-auto mb-4 text-success" weight="duotone" />
+                    <h2 className="text-2xl font-semibold mb-2 text-success">Workflow Complete!</h2>
+                    <p className="text-muted-foreground mb-6">
+                      Document has been processed, approved, and submitted successfully.
+                    </p>
+                    <Button onClick={resetWorkflow} size="lg">
+                      Process Another Document
+                    </Button>
+                  </div>
+                </Card>
+              )}
+            </div>
+          )}
+
+          {/* Manual Mode - Step by Step View */}
+          {workflowMode === 'manual' && (
           <div className="space-y-6">
             {stages.map((stage, index) => {
               const Icon = stage.icon
@@ -996,7 +1257,7 @@ function App() {
                         {getStatusBadge(status)}
                       </div>
 
-                      {index === 0 && status === 'active' && !document && workflowMode === 'manual' && (
+                      {index === 0 && status === 'active' && !document && (
                         <div
                           onDrop={handleDrop}
                           onDragOver={(e) => {
@@ -1233,6 +1494,7 @@ function App() {
               )
             })}
           </div>
+          )}
         </div>
       </main>
 
