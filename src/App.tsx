@@ -31,6 +31,7 @@ import {
 import { toast } from 'sonner'
 import { BlobServiceClient } from '@azure/storage-blob'
 import { AzureKeyCredential, DocumentAnalysisClient } from '@azure/ai-form-recognizer'
+import ApprovalWorkflow from '@/components/ApprovalWorkflow'
 
 type StageStatus = 'inactive' | 'active' | 'processing' | 'completed'
 
@@ -336,6 +337,9 @@ function App() {
   const [showSubmitAnimation, setShowSubmitAnimation] = useState(false)
   const [azureConfigured, setAzureConfigured] = useState(false)
   const [statusLoading, setStatusLoading] = useState(true)
+  const [rawDataWithConfidence, setRawDataWithConfidence] = useState<StructuredDataWithConfidence | null>(null)
+  const [reviewerNotes, setReviewerNotes] = useState('')
+  const [approvalStatus, setApprovalStatus] = useState<'pending' | 'approved' | 'draft'>('pending')
 
   useEffect(() => {
     checkAzureStatus().then(configured => {
@@ -391,6 +395,9 @@ function App() {
     setShowReview(false)
     setShowSubmitAnimation(false)
     setIsAutomatedRunning(false)
+    setRawDataWithConfidence(null)
+    setReviewerNotes('')
+    setApprovalStatus('pending')
   }
 
   const handleModeChange = (mode: string) => {
@@ -498,6 +505,11 @@ function App() {
         // If we got structured data from OCR, we can skip the LLM transform step
         const hasStructuredData = structuredData &&
           Object.values(structuredData).some(field => field?.value)
+
+        // Store raw data with confidence for the approval workflow
+        if (structuredData) {
+          setRawDataWithConfidence(structuredData)
+        }
 
         if (document) {
           const extractedStructuredData = hasStructuredData
@@ -648,10 +660,62 @@ function App() {
     }
   }
 
+  // New approval workflow handlers
+  const handleApprovalComplete = (data: CustomsDeclaration, notes: string) => {
+    // Update document with approved data
+    if (document) {
+      setDocument({
+        ...document,
+        structuredData: data,
+        confidenceScores: document.confidenceScores ? {
+          ...document.confidenceScores,
+          complianceConfidence: 1.0, // Human validated = 100%
+          overallConfidence: 1.0,
+        } : undefined
+      })
+    }
+    setEditedData(data)
+    setReviewerNotes(notes)
+    setApprovalStatus('approved')
+    setShowApproval(false)
+    updateStageStatus(5, 'completed')
+    advanceToStage(6)
+    toast.success('Declaration approved and locked')
+
+    if (workflowMode === 'automated' && isAutomatedRunning) {
+      setTimeout(() => handleSubmitToCustoms(), 800)
+    }
+  }
+
+  const handleSaveDraft = (data: CustomsDeclaration, notes: string) => {
+    if (document) {
+      setDocument({ ...document, structuredData: data })
+    }
+    setEditedData(data)
+    setReviewerNotes(notes)
+    setApprovalStatus('draft')
+    toast.info('Draft saved. Document remains in review.')
+  }
+
+  const handleReturnToAutomation = (reason: string, comment: string) => {
+    console.log('Returning to automation:', reason, comment)
+    setShowApproval(false)
+    // Go back to OCR stage
+    updateStageStatus(5, 'inactive')
+    updateStageStatus(4, 'inactive')
+    updateStageStatus(3, 'inactive')
+    updateStageStatus(2, 'active')
+    setCurrentStage(2)
+    setComplianceChecks([])
+    setComplianceDescriptions([])
+    toast.info(`Document returned to automation: ${reason}`)
+  }
+
+  // Legacy handlers (kept for compatibility)
   const handleApprove = () => {
     setShowApproval(false)
-    updateStageStatus(6, 'completed')
-    advanceToStage(7)
+    updateStageStatus(5, 'completed')
+    advanceToStage(6)
 
     if (workflowMode === 'automated' && isAutomatedRunning) {
       setTimeout(() => handleSubmitToCustoms(), 800)
@@ -1101,27 +1165,18 @@ function App() {
                       )}
 
                       {index === 5 && showApproval && (
-                        <Card className="border-warning bg-warning/5 shadow-sm">
-                          <div className="p-4 space-y-3">
-                            <div className="flex items-center gap-2">
-                              <UserCheck size={20} className="text-warning" weight="duotone" />
-                              <span className="text-sm font-medium">Approval Required</span>
-                            </div>
-                            <p className="text-xs text-muted-foreground">
-                              Document requires human verification before submission
-                            </p>
-                            <div className="flex gap-2">
-                              <Button onClick={handleApprove} size="sm" className="flex-1 bg-success hover:bg-success/90 text-white">
-                                <Check className="mr-1" size={16} />
-                                Approve
-                              </Button>
-                              <Button onClick={handleReject} size="sm" variant="outline" className="flex-1">
-                                <X className="mr-1" size={16} />
-                                Reject
-                              </Button>
-                            </div>
-                          </div>
-                        </Card>
+                        <ApprovalWorkflow
+                          structuredData={document?.structuredData || mockStructuredData}
+                          rawDataWithConfidence={rawDataWithConfidence}
+                          complianceChecks={complianceChecks}
+                          complianceDescriptions={complianceDescriptions}
+                          extractionConfidence={document?.confidenceScores?.ocrConfidence || 0}
+                          complianceConfidence={document?.confidenceScores?.complianceConfidence || 0}
+                          onApprove={handleApprovalComplete}
+                          onSaveDraft={handleSaveDraft}
+                          onReturnToAutomation={handleReturnToAutomation}
+                          onCancel={() => setShowApproval(false)}
+                        />
                       )}
 
                       {index === 6 && status === 'active' && (
