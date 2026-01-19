@@ -1,0 +1,24 @@
+{
+  "name": "Autonomous Document Workflow",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm",
+  "hostRequirements": {
+    "storage": "32gb",
+    "memory": "8gb",
+    "cpus": 4
+  },
+  "postCreateCommand": "npm install",
+  "forwardPorts": [
+    4000,
+    5000,
+    5173
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss"
+      ]
+    }
+  }
+}

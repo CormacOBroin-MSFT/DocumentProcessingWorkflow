@@ -1,0 +1,87 @@
+name: Build and Deploy to Azure App Service
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AZURE_WEBAPP_NAME: autonomousflow-app
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '22'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Create deployment package
+        run: |
+          # Copy frontend build to backend static folder
+          mkdir -p backend/static
+          cp -r dist/* backend/static/
+          
+          # Create deployment zip
+          cd backend
+          zip -r ../deploy.zip . -x "*.pyc" -x "__pycache__/*" -x "venv/*" -x ".env"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-package
+          path: deploy.zip
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.webapp-url }}
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-package
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy to Azure App Service
+        id: deploy
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          package: deploy.zip
+
+      - name: Output deployment URL
+        run: echo "Deployed to ${{ steps.deploy.outputs.webapp-url }}"

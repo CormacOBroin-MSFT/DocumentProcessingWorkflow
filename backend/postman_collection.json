@@ -1,0 +1,204 @@
+{
+  "info": {
+    "name": "AI Document Processing API",
+    "description": "REST API for AI-powered customs document processing with Azure integration",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:5000",
+      "type": "string"
+    },
+    {
+      "key": "document_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "blob_url",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": ["{{base_url}}"],
+          "path": ["health"]
+        },
+        "description": "Check if the API is healthy and running"
+      }
+    },
+    {
+      "name": "Upload Document",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "    var jsonData = pm.response.json();",
+              "    pm.collectionVariables.set('document_id', jsonData.document_id);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": []
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/api/documents/upload",
+          "host": ["{{base_url}}"],
+          "path": ["api", "documents", "upload"]
+        },
+        "description": "Upload a document (image or PDF)"
+      }
+    },
+    {
+      "name": "Store in Azure Blob",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "    var jsonData = pm.response.json();",
+              "    pm.collectionVariables.set('blob_url', jsonData.blob_url);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": []
+            },
+            {
+              "key": "document_id",
+              "value": "{{document_id}}",
+              "type": "text"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/api/storage/upload",
+          "host": ["{{base_url}}"],
+          "path": ["api", "storage", "upload"]
+        },
+        "description": "Upload document to Azure Blob Storage"
+      }
+    },
+    {
+      "name": "Run OCR Analysis",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"document_id\": \"{{document_id}}\",\n  \"blob_url\": \"{{blob_url}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/ocr/analyze",
+          "host": ["{{base_url}}"],
+          "path": ["api", "ocr", "analyze"]
+        },
+        "description": "Analyze document using Azure AI Document Intelligence"
+      }
+    },
+    {
+      "name": "Transform to Structured Data",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"document_id\": \"{{document_id}}\",\n  \"raw_data\": {\n    \"SHIPPER NAME\": {\n      \"value\": \"Global Electronics Ltd.\",\n      \"confidence\": 0.98\n    },\n    \"RECEIVER NAME\": {\n      \"value\": \"European Distribution Center\",\n      \"confidence\": 0.97\n    },\n    \"GOODS\": {\n      \"value\": \"Electronic Components\",\n      \"confidence\": 0.89\n    },\n    \"VALUE\": {\n      \"value\": \"$45,850 USD\",\n      \"confidence\": 0.92\n    },\n    \"ORIGIN\": {\n      \"value\": \"United States\",\n      \"confidence\": 0.99\n    },\n    \"WEIGHT\": {\n      \"value\": \"125 KG\",\n      \"confidence\": 0.96\n    },\n    \"HS CODE\": {\n      \"value\": \"8542.31\",\n      \"confidence\": 0.87\n    }\n  }\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/transform/structure",
+          "host": ["{{base_url}}"],
+          "path": ["api", "transform", "structure"]
+        },
+        "description": "Transform raw OCR data into structured customs declaration"
+      }
+    },
+    {
+      "name": "Validate Compliance",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"document_id\": \"{{document_id}}\",\n  \"structured_data\": {\n    \"shipper\": \"Global Electronics Ltd.\",\n    \"receiver\": \"European Distribution Center\",\n    \"goodsDescription\": \"Electronic Components - Semiconductors\",\n    \"value\": \"45850.00 USD\",\n    \"countryOfOrigin\": \"United States\",\n    \"hsCode\": \"8542.31\",\n    \"weight\": \"125 KG\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/compliance/validate",
+          "host": ["{{base_url}}"],
+          "path": ["api", "compliance", "validate"]
+        },
+        "description": "Validate customs declaration for compliance"
+      }
+    },
+    {
+      "name": "Submit to Customs",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"document_id\": \"{{document_id}}\",\n  \"structured_data\": {\n    \"shipper\": \"Global Electronics Ltd.\",\n    \"receiver\": \"European Distribution Center\",\n    \"goodsDescription\": \"Electronic Components - Semiconductors\",\n    \"value\": \"45850.00 USD\",\n    \"countryOfOrigin\": \"United States\",\n    \"hsCode\": \"8542.31\",\n    \"weight\": \"125 KG\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/customs/submit",
+          "host": ["{{base_url}}"],
+          "path": ["api", "customs", "submit"]
+        },
+        "description": "Submit customs declaration (mock endpoint)"
+      }
+    }
+  ]
+}
