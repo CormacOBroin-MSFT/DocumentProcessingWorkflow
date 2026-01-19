@@ -2,9 +2,12 @@
 Data Transformation Routes
 Handles LLM-based transformation of raw OCR data to structured format
 """
+import logging
 from flask import Blueprint, request, jsonify
 from app.services.llm_client import get_llm_service
 from app.config import config
+
+logger = logging.getLogger('autonomousflow.transform')
 
 bp = Blueprint('transform', __name__, url_prefix='/api/transform')
 
@@ -25,12 +28,6 @@ def transform_data():
     Returns:
         JSON with structured_data and structure_confidence
     """
-    if not config.is_openai_configured():
-        return jsonify({
-            'error': 'OpenAI not configured',
-            'mock_mode': True
-        }), 503
-    
     data = request.get_json()
     
     if not data:
@@ -46,9 +43,17 @@ def transform_data():
         llm_service = get_llm_service()
         
         if not llm_service:
+            logger.error("Could not initialize LLM service")
             return jsonify({'error': 'Could not initialize LLM service'}), 500
         
+        logger.info("=" * 60)
+        logger.info("🔄 STAGE 3: DATA TRANSFORMATION")
+        logger.info("=" * 60)
+        
         result = llm_service.transform_to_structured_data(raw_data)
+        
+        logger.info(f"✅ Transformed {len(raw_data)} fields (confidence: {result['structure_confidence']:.0%})")
+        logger.info("=" * 60)
         
         return jsonify({
             'document_id': document_id,
@@ -58,4 +63,5 @@ def transform_data():
         }), 200
     
     except Exception as e:
+        logger.error(f"❌ Transformation failed: {e}")
         return jsonify({'error': str(e)}), 500

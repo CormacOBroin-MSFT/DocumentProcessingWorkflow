@@ -18,9 +18,9 @@ AI-powered customs document processing workflow using Azure AI services. This ap
               ┌───────────────────────┼───────────────────────┐
               ▼                       ▼                       ▼
        ┌───────────┐          ┌───────────┐           ┌───────────┐
-       │   Blob    │          │ Document  │           │  Azure    │
-       │  Storage  │          │ Intelli-  │           │  OpenAI   │
-       │           │          │ gence     │           │           │
+       │   Blob    │          │  Content  │           │  Azure    │
+       │  Storage  │          │ Understand│           │  OpenAI   │
+       │           │          │ ing       │           │           │
        └───────────┘          └───────────┘           └───────────┘
 ```
 
@@ -30,7 +30,7 @@ AI-powered customs document processing workflow using Azure AI services. This ap
 
 - 📄 **Document Upload** - Drag & drop document intake
 - ☁️ **Azure Blob Storage** - Secure cloud document storage  
-- 🔍 **OCR Processing** - Azure AI Document Intelligence for text extraction
+- 🔍 **OCR Processing** - Azure AI Content Understanding for text extraction
 - 🔄 **Data Transformation** - LLM-powered structuring of extracted data
 - ✅ **Compliance Validation** - Automated customs compliance checks
 - 👤 **Human-in-the-Loop** - Manual review and approval workflow
@@ -88,7 +88,7 @@ This creates all resources with proper Managed Identity configuration:
 - **App Service Plan** (B1 - ~$13/month)
 - **App Service** (Linux Python 3.11)
 - **Storage Account** + blob container
-- **Document Intelligence** (F0 free tier)
+- **Content Understanding** (F0 free tier)
 - **Key Vault** for secrets
 
 ### Post-Deployment: Add OpenAI Key
@@ -148,7 +148,7 @@ AutonomousFlow/
 | `/health` | GET | Health check |
 | `/api/documents/upload` | POST | Upload document |
 | `/api/storage/upload` | POST | Store in Azure Blob |
-| `/api/ocr/analyze` | POST | Run Document Intelligence OCR |
+| `/api/ocr/analyze` | POST | Run Content Understanding OCR |
 | `/api/transform/structure` | POST | LLM data transformation |
 | `/api/compliance/validate` | POST | LLM compliance validation |
 | `/api/customs/submit` | POST | Submit to customs (mock) |
@@ -164,13 +164,14 @@ AutonomousFlow/
 AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;...
 AZURE_STORAGE_CONTAINER=customs-documents
 
-# Azure Document Intelligence
-AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=https://xxx.cognitiveservices.azure.com/
-AZURE_DOCUMENT_INTELLIGENCE_KEY=xxx
+# Azure Content Understanding
+AZURE_CONTENT_UNDERSTANDING_ENDPOINT=https://xxx.cognitiveservices.azure.com/
+# AZURE_CONTENT_UNDERSTANDING_KEY=xxx  (optional - uses DefaultAzureCredential)
 
-# OpenAI
-OPENAI_API_KEY=sk-xxx
-OPENAI_MODEL=gpt-4o
+# Azure OpenAI
+AZURE_OPENAI_ENDPOINT=https://xxx.openai.azure.com/
+AZURE_OPENAI_KEY=xxx
+AZURE_OPENAI_DEPLOYMENT=gpt-4o
 
 # Flask
 FLASK_ENV=development
@@ -185,7 +186,7 @@ Set automatically by Bicep deployment - uses Managed Identity (no keys in code):
 |----------|-------------|
 | `AZURE_STORAGE_ACCOUNT_NAME` | Storage account name |
 | `AZURE_STORAGE_CONTAINER` | Blob container name |
-| `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` | Document Intelligence URL |
+| `AZURE_CONTENT_UNDERSTANDING_ENDPOINT` | Content Understanding URL |
 | `AZURE_KEY_VAULT_URL` | Key Vault URL (for OpenAI key) |
 
 ---
@@ -196,7 +197,7 @@ Set automatically by Bicep deployment - uses Managed Identity (no keys in code):
 |----------|-----|---------------|
 | App Service Plan | B1 | $13 |
 | Storage Account | Standard LRS | $1 |
-| Document Intelligence | F0 (free) → S0 | $0 → $1.50/1K pages |
+| Content Understanding | F0 (free) → S0 | $0 → $1.50/1K pages |
 | Key Vault | Standard | ~$0.03/10K ops |
 | **Total** | | **~$15/month** |
 

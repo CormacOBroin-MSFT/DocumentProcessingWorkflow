@@ -14,7 +14,6 @@ import {
   Database,
   ScanSmiley,
   TextAlignLeft,
-  ArrowsDownUp,
   ShieldCheck,
   UserCheck,
   PaperPlaneTilt,
@@ -40,6 +39,7 @@ type WorkflowMode = 'manual' | 'automated'
 type DocumentData = {
   fileName: string
   fileUrl: string
+  fileType?: string
   blobUrl?: string
   rawData?: Record<string, { value: string; confidence: number }>
   structuredData?: CustomsDeclaration
@@ -56,6 +56,36 @@ type CustomsDeclaration = {
   weight: string
 }
 
+// Backend response format with per-field confidence
+type StructuredDataWithConfidence = {
+  shipper: { value: string; confidence: number }
+  receiver: { value: string; confidence: number }
+  goodsDescription: { value: string; confidence: number }
+  value: { value: string; confidence: number }
+  countryOfOrigin: { value: string; confidence: number }
+  hsCode: { value: string; confidence: number }
+  weight: { value: string; confidence: number }
+}
+
+// Helper to extract values from structured data with confidence
+function extractValuesFromStructuredData(data: StructuredDataWithConfidence | CustomsDeclaration): CustomsDeclaration {
+  // If it's already a plain CustomsDeclaration, return as-is
+  if (typeof data.shipper === 'string') {
+    return data as CustomsDeclaration
+  }
+  // Extract values from {value, confidence} structure
+  const withConfidence = data as StructuredDataWithConfidence
+  return {
+    shipper: withConfidence.shipper?.value ?? '',
+    receiver: withConfidence.receiver?.value ?? '',
+    goodsDescription: withConfidence.goodsDescription?.value ?? '',
+    value: withConfidence.value?.value ?? '',
+    countryOfOrigin: withConfidence.countryOfOrigin?.value ?? '',
+    hsCode: withConfidence.hsCode?.value ?? '',
+    weight: withConfidence.weight?.value ?? '',
+  }
+}
+
 type ConfidenceScores = {
   ocrConfidence: number
   structureConfidence: number
@@ -63,18 +93,29 @@ type ConfidenceScores = {
   overallConfidence: number
 }
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+
 const AZURE_CONFIG = {
   storageConnectionString: import.meta.env.VITE_AZURE_STORAGE_CONNECTION_STRING || '',
   storageContainerName: import.meta.env.VITE_AZURE_STORAGE_CONTAINER || 'customs-documents',
-  documentIntelligenceEndpoint: import.meta.env.VITE_AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT || '',
-  documentIntelligenceKey: import.meta.env.VITE_AZURE_DOCUMENT_INTELLIGENCE_KEY || '',
+  contentUnderstandingEndpoint: import.meta.env.VITE_AZURE_CONTENT_UNDERSTANDING_ENDPOINT || '',
 }
 
-const isAzureConfigured = () => {
+// Check backend status for Azure configuration
+const checkAzureStatus = async (): Promise<boolean> => {
+  try {
+    const response = await fetch(`${API_BASE}/api/status`)
+    if (response.ok) {
+      const data = await response.json()
+      return data.azureConfigured && data.openaiConfigured
+    }
+  } catch (e) {
+    console.warn('Could not check backend status, falling back to env vars')
+  }
+  // Fallback to env var check
   return !!(
     AZURE_CONFIG.storageConnectionString &&
-    AZURE_CONFIG.documentIntelligenceEndpoint &&
-    AZURE_CONFIG.documentIntelligenceKey
+    AZURE_CONFIG.contentUnderstandingEndpoint
   )
 }
 
@@ -108,92 +149,86 @@ const mockConfidenceScores: ConfidenceScores = {
 }
 
 async function uploadToAzureBlob(file: File): Promise<string> {
-  if (!isAzureConfigured()) {
-    console.warn('Azure not configured, using mock blob URL')
-    return URL.createObjectURL(file)
-  }
+  // Always use backend API for uploads
+  const formData = new FormData()
+  formData.append('file', file)
 
   try {
-    const blobServiceClient = BlobServiceClient.fromConnectionString(
-      AZURE_CONFIG.storageConnectionString
-    )
-    const containerClient = blobServiceClient.getContainerClient(
-      AZURE_CONFIG.storageContainerName
-    )
-
-    await containerClient.createIfNotExists()
-
-    const blobName = `${Date.now()}-${file.name}`
-    const blockBlobClient = containerClient.getBlockBlobClient(blobName)
-
-    await blockBlobClient.uploadData(file, {
-      blobHTTPHeaders: { blobContentType: file.type },
+    const response = await fetch(`${API_BASE}/api/upload`, {
+      method: 'POST',
+      body: formData,
     })
 
-    return blockBlobClient.url
+    if (!response.ok) {
+      throw new Error(`Upload failed: ${response.statusText}`)
+    }
+
+    const data = await response.json()
+    return data.blob_url || data.url
   } catch (error) {
-    console.error('Error uploading to Azure Blob:', error)
-    toast.error('Failed to upload to Azure Storage')
+    console.error('Error uploading file:', error)
+    toast.error('Failed to upload file')
     throw error
   }
 }
 
 async function analyzeDocumentWithAI(blobUrl: string): Promise<{
   rawData: Record<string, { value: string; confidence: number }>
+  structuredData: StructuredDataWithConfidence | null
   ocrConfidence: number
 }> {
-  if (!isAzureConfigured()) {
-    console.warn('Azure not configured, using mock OCR data')
-    return {
-      rawData: mockRawData,
-      ocrConfidence: 0.94,
-    }
-  }
-
+  // Use backend API for OCR + Field Extraction
   try {
-    const client = new DocumentAnalysisClient(
-      AZURE_CONFIG.documentIntelligenceEndpoint,
-      new AzureKeyCredential(AZURE_CONFIG.documentIntelligenceKey)
-    )
+    console.log('Calling OCR API with URL:', blobUrl)
+    const response = await fetch(`${API_BASE}/api/ocr/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ blob_url: blobUrl })
+    })
 
-    const poller = await client.beginAnalyzeDocumentFromUrl('prebuilt-document', blobUrl)
-    const result = await poller.pollUntilDone()
+    console.log('OCR API response status:', response.status)
 
-    const rawData: Record<string, { value: string; confidence: number }> = {}
-    let totalConfidence = 0
-    let fieldCount = 0
+    if (response.ok) {
+      const result = await response.json()
+      console.log('OCR API result:', result)
 
-    if (result.keyValuePairs) {
-      for (const kvp of result.keyValuePairs) {
-        if (kvp.key && kvp.value) {
-          const keyText = kvp.key.content || 'Unknown'
-          const valueText = kvp.value.content || ''
-          const confidence = kvp.confidence || 0
+      // Check if structured data was extracted (new flow)
+      const hasStructuredData = result.structured_data &&
+        Object.values(result.structured_data).some((field: unknown) => {
+          const f = field as { value?: string }
+          return f?.value
+        })
 
-          rawData[keyText.toUpperCase()] = {
-            value: valueText,
-            confidence: confidence,
-          }
-
-          totalConfidence += confidence
-          fieldCount++
+      if (hasStructuredData) {
+        return {
+          rawData: result.raw_data || {},
+          structuredData: result.structured_data as StructuredDataWithConfidence,
+          ocrConfidence: result.ocr_confidence || 0.94,
         }
+      } else if (result.raw_data && Object.keys(result.raw_data).length > 0) {
+        // Fallback to old format (raw_data only)
+        return {
+          rawData: result.raw_data,
+          structuredData: null,
+          ocrConfidence: result.ocr_confidence || 0.94,
+        }
+      } else {
+        console.warn('OCR returned empty data, using mock')
       }
-    }
-
-    const ocrConfidence = fieldCount > 0 ? totalConfidence / fieldCount : 0
-
-    return {
-      rawData: Object.keys(rawData).length > 0 ? rawData : mockRawData,
-      ocrConfidence: ocrConfidence || 0.94,
+    } else {
+      const errorText = await response.text()
+      console.warn('OCR API error:', response.status, errorText)
     }
   } catch (error) {
-    console.error('Error analyzing document:', error)
-    toast.error('Failed to analyze document with Azure AI')
-    return {
-      rawData: mockRawData,
-      ocrConfidence: 0.94,
-    }
+    console.warn('OCR API not available, using mock data:', error)
+  }
+
+  // Fallback to mock data
+  console.log('Using mock OCR data')
+  return {
+    rawData: mockRawData,
+    structuredData: null,
+    ocrConfidence: 0.94,
   }
 }
 
@@ -202,7 +237,7 @@ async function transformToStructuredData(
 ): Promise<{ structuredData: CustomsDeclaration; structureConfidence: number }> {
   // Try backend API first
   try {
-    const response = await fetch('/api/transform/structure', {
+    const response = await fetch(`${API_BASE}/api/transform/structure`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ raw_data: rawData })
@@ -210,8 +245,10 @@ async function transformToStructuredData(
 
     if (response.ok) {
       const result = await response.json()
+      // Extract plain values from the per-field confidence format
+      const structuredData = extractValuesFromStructuredData(result.structured_data)
       return {
-        structuredData: result.structured_data,
+        structuredData,
         structureConfidence: result.structure_confidence
       }
     }
@@ -236,10 +273,10 @@ async function transformToStructuredData(
 
 async function performComplianceCheck(
   data: CustomsDeclaration
-): Promise<{ checks: boolean[]; complianceConfidence: number }> {
+): Promise<{ checks: boolean[]; complianceConfidence: number; issueDescriptions: string[] }> {
   // Try backend API first
   try {
-    const response = await fetch('/api/compliance/validate', {
+    const response = await fetch(`${API_BASE}/api/compliance/validate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ structured_data: data })
@@ -250,6 +287,7 @@ async function performComplianceCheck(
       return {
         checks: result.checks || [true, true, true, true, true],
         complianceConfidence: result.compliance_confidence || 0.88,
+        issueDescriptions: result.issue_descriptions || [],
       }
     }
   } catch (error) {
@@ -260,6 +298,13 @@ async function performComplianceCheck(
   return {
     checks: [true, true, true, true, true],
     complianceConfidence: 0.88,
+    issueDescriptions: [
+      'HS code format validated successfully',
+      'No country restrictions or embargoes apply',
+      'Declared value is reasonable for goods type',
+      'Shipper information verified and complete',
+      'All required fields present and properly formatted'
+    ],
   }
 }
 
@@ -276,7 +321,6 @@ function App() {
     'inactive',
     'inactive',
     'inactive',
-    'inactive',
   ])
   const [document, setDocument] = useState<DocumentData | null>(null)
   const [uploadProgress, setUploadProgress] = useState(0)
@@ -285,22 +329,26 @@ function App() {
   const [showRawData, setShowRawData] = useState(false)
   const [showStructuredData, setShowStructuredData] = useState(false)
   const [complianceChecks, setComplianceChecks] = useState<boolean[]>([])
+  const [complianceDescriptions, setComplianceDescriptions] = useState<string[]>([])
   const [showApproval, setShowApproval] = useState(false)
   const [showReview, setShowReview] = useState(false)
   const [editedData, setEditedData] = useState<CustomsDeclaration>(mockStructuredData)
   const [showSubmitAnimation, setShowSubmitAnimation] = useState(false)
   const [azureConfigured, setAzureConfigured] = useState(false)
+  const [statusLoading, setStatusLoading] = useState(true)
 
   useEffect(() => {
-    setAzureConfigured(isAzureConfigured())
+    checkAzureStatus().then(configured => {
+      setAzureConfigured(configured)
+      setStatusLoading(false)
+    })
   }, [])
 
   const stages = [
     { name: 'Upload Document', icon: CloudArrowUp, label: 'Document Intake' },
     { name: 'Azure Storage', icon: Database, label: 'Data Collection' },
-    { name: 'OCR Processing', icon: ScanSmiley, label: 'Azure AI Document Intelligence' },
-    { name: 'Extracted Data', icon: TextAlignLeft, label: 'Raw Key-Value Pairs' },
-    { name: 'Data Transform', icon: ArrowsDownUp, label: 'Customs Declaration Template' },
+    { name: 'OCR + Transformation', icon: ScanSmiley, label: 'Content Understanding' },
+    { name: 'Customs Fields', icon: TextAlignLeft, label: 'Declaration Data' },
     { name: 'Compliance Check', icon: ShieldCheck, label: 'Automated Validation' },
     { name: 'Approval Workflow', icon: UserCheck, label: 'Human Review' },
     { name: 'Customs Submission', icon: PaperPlaneTilt, label: 'Authority Filing' },
@@ -331,7 +379,6 @@ function App() {
       'inactive',
       'inactive',
       'inactive',
-      'inactive',
     ])
     setDocument(null)
     setUploadProgress(0)
@@ -339,6 +386,7 @@ function App() {
     setShowRawData(false)
     setShowStructuredData(false)
     setComplianceChecks([])
+    setComplianceDescriptions([])
     setShowApproval(false)
     setShowReview(false)
     setShowSubmitAnimation(false)
@@ -362,6 +410,7 @@ function App() {
           setDocument({
             fileName: file.name,
             fileUrl: fileUrl,
+            fileType: file.type,
           })
           updateStageStatus(0, 'completed')
           advanceToStage(1)
@@ -440,30 +489,52 @@ function App() {
     }
 
     try {
-      const { rawData, ocrConfidence } = await analyzeDocumentWithAI(urlToAnalyze)
+      const { rawData, structuredData, ocrConfidence } = await analyzeDocumentWithAI(urlToAnalyze)
 
       setTimeout(() => {
         setShowScanLine(false)
         setShowRawData(true)
 
+        // If we got structured data from OCR, we can skip the LLM transform step
+        const hasStructuredData = structuredData &&
+          Object.values(structuredData).some(field => field?.value)
+
         if (document) {
+          const extractedStructuredData = hasStructuredData
+            ? extractValuesFromStructuredData(structuredData)
+            : undefined
+
           setDocument({
             ...document,
             rawData,
+            structuredData: extractedStructuredData,
             confidenceScores: {
               ocrConfidence,
-              structureConfidence: 0,
+              structureConfidence: hasStructuredData ? ocrConfidence : 0,
               complianceConfidence: 0,
               overallConfidence: ocrConfidence,
             },
           })
+
+          if (extractedStructuredData) {
+            setEditedData(extractedStructuredData)
+            setShowStructuredData(true)
+          }
         }
 
         updateStageStatus(2, 'completed')
         advanceToStage(3)
 
         if (workflowMode === 'automated' && isAutomatedRunning) {
-          setTimeout(() => handleTransformData(rawData), 800)
+          if (hasStructuredData) {
+            // Content Understanding extracted structured data - go to compliance
+            setTimeout(() => {
+              handleDataTransformComplete()
+            }, 800)
+          } else {
+            // Need LLM transform for raw data (fallback)
+            setTimeout(() => handleTransformData(rawData), 800)
+          }
         }
       }, 1500)
     } catch (error) {
@@ -506,7 +577,7 @@ function App() {
         }
 
         updateStageStatus(3, 'completed')
-        advanceToStage(4)
+        advanceToStage(3)
 
         if (workflowMode === 'automated' && isAutomatedRunning) {
           setTimeout(() => handleDataTransformComplete(), 800)
@@ -519,8 +590,8 @@ function App() {
   }
 
   const handleDataTransformComplete = () => {
-    updateStageStatus(4, 'completed')
-    advanceToStage(5)
+    updateStageStatus(3, 'completed')
+    advanceToStage(4)
 
     if (workflowMode === 'automated' && isAutomatedRunning) {
       setTimeout(() => handleComplianceCheck(), 800)
@@ -533,15 +604,17 @@ function App() {
       return
     }
 
-    updateStageStatus(5, 'processing')
+    updateStageStatus(4, 'processing')
     setComplianceChecks([])
+    setComplianceDescriptions([])
 
     try {
-      const { checks, complianceConfidence } = await performComplianceCheck(document.structuredData)
+      const { checks, complianceConfidence, issueDescriptions } = await performComplianceCheck(document.structuredData)
 
       checks.forEach((_, index) => {
         setTimeout(() => {
           setComplianceChecks((prev) => [...prev, checks[index]])
+          setComplianceDescriptions((prev) => [...prev, issueDescriptions[index] || ''])
           if (index === checks.length - 1) {
             setTimeout(() => {
               if (document.confidenceScores) {
@@ -558,8 +631,8 @@ function App() {
                 })
               }
 
-              updateStageStatus(5, 'completed')
-              advanceToStage(6)
+              updateStageStatus(4, 'completed')
+              advanceToStage(5)
               setShowApproval(true)
 
               if (workflowMode === 'automated' && isAutomatedRunning) {
@@ -596,8 +669,8 @@ function App() {
     }
     setShowReview(false)
     setShowApproval(false)
-    updateStageStatus(6, 'completed')
-    advanceToStage(7)
+    updateStageStatus(5, 'completed')
+    advanceToStage(6)
 
     if (workflowMode === 'automated' && isAutomatedRunning) {
       setTimeout(() => handleSubmitToCustoms(), 800)
@@ -609,12 +682,12 @@ function App() {
   }
 
   const handleSubmitToCustoms = () => {
-    updateStageStatus(7, 'processing')
+    updateStageStatus(6, 'processing')
     setShowSubmitAnimation(true)
     setTimeout(() => {
       setShowSubmitAnimation(false)
-      updateStageStatus(7, 'completed')
-      advanceToStage(8)
+      updateStageStatus(6, 'completed')
+      advanceToStage(7)
 
       if (workflowMode === 'automated' && isAutomatedRunning) {
         setTimeout(() => handleStoreInFabric(), 800)
@@ -623,9 +696,9 @@ function App() {
   }
 
   const handleStoreInFabric = () => {
-    updateStageStatus(8, 'processing')
+    updateStageStatus(7, 'processing')
     setTimeout(() => {
-      updateStageStatus(8, 'completed')
+      updateStageStatus(7, 'completed')
       setIsAutomatedRunning(false)
     }, 1500)
   }
@@ -703,9 +776,51 @@ function App() {
     </div>
   )
 
+  const DocumentPreview = ({ doc, showScanAnimation = false }: { doc: DocumentData; showScanAnimation?: boolean }) => {
+    const isPdf = doc.fileType === 'application/pdf' || doc.fileName.toLowerCase().endsWith('.pdf')
+
+    return (
+      <div className="relative aspect-video rounded-lg overflow-hidden bg-muted">
+        {isPdf ? (
+          <object
+            data={doc.fileUrl}
+            type="application/pdf"
+            className="w-full h-full"
+          >
+            <div className="flex items-center justify-center h-full bg-muted">
+              <div className="text-center p-4">
+                <div className="text-4xl mb-2">📄</div>
+                <p className="text-sm text-muted-foreground">{doc.fileName}</p>
+                <a
+                  href={doc.fileUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary hover:underline mt-2 inline-block"
+                >
+                  Open PDF
+                </a>
+              </div>
+            </div>
+          </object>
+        ) : (
+          <img
+            src={doc.fileUrl}
+            alt={doc.fileName}
+            className="w-full h-full object-cover"
+          />
+        )}
+        {showScanAnimation && (
+          <div className="absolute inset-0 overflow-hidden">
+            <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-processing to-transparent scan-line" />
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {!azureConfigured && (
+      {!statusLoading && !azureConfigured && (
         <div className="bg-warning/10 border-b border-warning px-8 py-3">
           <div className="flex items-center gap-2 text-sm">
             <Warning size={20} className="text-warning" weight="fill" />
@@ -753,7 +868,7 @@ function App() {
 
             {workflowMode === 'automated' && (
               <div className="flex gap-2">
-                {!isAutomatedRunning && currentStage < 8 && (
+                {!isAutomatedRunning && currentStage < 7 && (
                   <Button onClick={startAutomatedWorkflow} size="sm">
                     <Play className="mr-2" size={16} />
                     {document ? 'Resume' : 'Start'} Automated
@@ -801,9 +916,9 @@ function App() {
                       <div className="flex items-start justify-between">
                         <div className="flex items-center gap-4">
                           <div className={`p-3 rounded-lg ${status === 'completed' ? 'bg-success/20 text-success' :
-                              status === 'processing' ? 'bg-processing/20 text-processing' :
-                                status === 'active' ? 'bg-accent/20 text-accent' :
-                                  'bg-muted text-muted-foreground'
+                            status === 'processing' ? 'bg-processing/20 text-processing' :
+                              status === 'active' ? 'bg-accent/20 text-accent' :
+                                'bg-muted text-muted-foreground'
                             }`}>
                             <Icon size={24} weight="duotone" />
                           </div>
@@ -826,8 +941,8 @@ function App() {
                           }}
                           onDragLeave={() => setIsDragging(false)}
                           className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-all ${isDragging
-                              ? 'border-accent bg-accent/10 scale-105'
-                              : 'border-border hover:border-accent/50 hover:bg-accent/5'
+                            ? 'border-accent bg-accent/10 scale-105'
+                            : 'border-border hover:border-accent/50 hover:bg-accent/5'
                             }`}
                           onClick={() => window.document.getElementById('file-input')?.click()}
                         >
@@ -856,13 +971,7 @@ function App() {
 
                       {index === 0 && document && (
                         <div className="space-y-2">
-                          <div className="relative aspect-video rounded-lg overflow-hidden bg-muted">
-                            <img
-                              src={document.fileUrl}
-                              alt={document.fileName}
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
+                          <DocumentPreview doc={document} />
                           <p className="text-xs text-muted-foreground truncate">
                             {document.fileName}
                           </p>
@@ -884,16 +993,7 @@ function App() {
                       )}
 
                       {index === 2 && document && showScanLine && (
-                        <div className="relative aspect-video rounded-lg overflow-hidden bg-muted">
-                          <img
-                            src={document.fileUrl}
-                            alt={document.fileName}
-                            className="w-full h-full object-cover"
-                          />
-                          <div className="absolute inset-0 overflow-hidden">
-                            <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-processing to-transparent scan-line" />
-                          </div>
-                        </div>
+                        <DocumentPreview doc={document} showScanAnimation={true} />
                       )}
 
                       {index === 2 && status === 'completed' && document?.confidenceScores && (
@@ -905,35 +1005,7 @@ function App() {
                         </div>
                       )}
 
-                      {index === 3 && showRawData && document?.rawData && (
-                        <div className="space-y-2">
-                          <ScrollArea className="h-48 rounded-lg border border-border p-3 bg-muted/30">
-                            <div className="space-y-2 font-mono text-xs">
-                              {Object.entries(document.rawData).map(([key, data], i) => (
-                                <div key={i} className="stagger-fade-in" style={{ animationDelay: `${i * 150}ms` }}>
-                                  <div className="flex justify-between items-start">
-                                    <div className="flex-1">
-                                      <span className="text-accent">{key}:</span>{' '}
-                                      <span className="text-foreground">{data.value}</span>
-                                    </div>
-                                    <span className={`text-[10px] ml-2 ${getConfidenceColor(data.confidence)}`}>
-                                      {(data.confidence * 100).toFixed(0)}%
-                                    </span>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </ScrollArea>
-                          {status === 'active' && (
-                            <Button onClick={() => handleTransformData()} className="w-full" size="sm">
-                              <ArrowsDownUp className="mr-2" size={16} />
-                              Transform to Structured Data
-                            </Button>
-                          )}
-                        </div>
-                      )}
-
-                      {index === 4 && showStructuredData && document?.structuredData && (
+                      {index === 3 && showStructuredData && document?.structuredData && (
                         <div className="space-y-2">
                           <ScrollArea className="h-48 rounded-lg border border-border p-3 bg-muted/30">
                             <div className="space-y-2 font-mono text-xs">
@@ -952,7 +1024,7 @@ function App() {
                           {document.confidenceScores && (
                             <div className="p-3 bg-muted/30 rounded-lg space-y-2">
                               <ConfidenceDisplay
-                                label="Structure Confidence"
+                                label="Extraction Confidence"
                                 score={document.confidenceScores.structureConfidence}
                               />
                             </div>
@@ -966,14 +1038,14 @@ function App() {
                         </div>
                       )}
 
-                      {index === 5 && status === 'active' && complianceChecks.length === 0 && (
+                      {index === 4 && status === 'active' && complianceChecks.length === 0 && (
                         <Button onClick={handleComplianceCheck} className="w-full">
                           <ShieldCheck className="mr-2" size={16} />
                           Run Compliance Check
                         </Button>
                       )}
 
-                      {index === 5 && complianceChecks.length > 0 && (
+                      {index === 4 && complianceChecks.length > 0 && (
                         <div className="space-y-3">
                           <div className="space-y-2">
                             {[
@@ -985,20 +1057,35 @@ function App() {
                             ].map((check, i) => (
                               <div
                                 key={i}
-                                className="flex items-center gap-2 text-sm"
+                                className="flex flex-col gap-1"
                               >
-                                {complianceChecks[i] ? (
-                                  <CheckCircle
-                                    size={16}
-                                    className="text-success check-bounce"
-                                    weight="fill"
-                                  />
-                                ) : (
-                                  <div className="w-4 h-4 border-2 border-muted rounded-full" />
+                                <div className="flex items-center gap-2 text-sm">
+                                  {complianceChecks[i] !== undefined ? (
+                                    complianceChecks[i] ? (
+                                      <CheckCircle
+                                        size={16}
+                                        className="text-success check-bounce flex-shrink-0"
+                                        weight="fill"
+                                      />
+                                    ) : (
+                                      <Warning
+                                        size={16}
+                                        className="text-warning flex-shrink-0"
+                                        weight="fill"
+                                      />
+                                    )
+                                  ) : (
+                                    <div className="w-4 h-4 border-2 border-muted rounded-full flex-shrink-0" />
+                                  )}
+                                  <span className={complianceChecks[i] !== undefined ? 'text-foreground font-medium' : 'text-muted-foreground'}>
+                                    {check}
+                                  </span>
+                                </div>
+                                {complianceDescriptions[i] && (
+                                  <p className={`text-xs ml-6 ${complianceChecks[i] ? 'text-muted-foreground' : 'text-warning'}`}>
+                                    {complianceDescriptions[i]}
+                                  </p>
                                 )}
-                                <span className={complianceChecks[i] ? 'text-foreground' : 'text-muted-foreground'}>
-                                  {check}
-                                </span>
                               </div>
                             ))}
                           </div>
@@ -1013,7 +1100,7 @@ function App() {
                         </div>
                       )}
 
-                      {index === 6 && showApproval && (
+                      {index === 5 && showApproval && (
                         <Card className="border-warning bg-warning/5 shadow-sm">
                           <div className="p-4 space-y-3">
                             <div className="flex items-center gap-2">
@@ -1037,14 +1124,14 @@ function App() {
                         </Card>
                       )}
 
-                      {index === 7 && status === 'active' && (
+                      {index === 6 && status === 'active' && (
                         <Button onClick={handleSubmitToCustoms} className="w-full">
                           <PaperPlaneTilt className="mr-2" size={16} />
                           Submit to Customs
                         </Button>
                       )}
 
-                      {index === 7 && showSubmitAnimation && (
+                      {index === 6 && showSubmitAnimation && (
                         <div className="text-center py-4">
                           <div className="inline-block animate-bounce">
                             <PaperPlaneTilt size={48} className="text-processing" weight="duotone" />
@@ -1055,14 +1142,14 @@ function App() {
                         </div>
                       )}
 
-                      {index === 8 && status === 'active' && (
+                      {index === 7 && status === 'active' && (
                         <Button onClick={handleStoreInFabric} className="w-full">
                           <ChartBar className="mr-2" size={16} />
                           Store in Fabric
                         </Button>
                       )}
 
-                      {index === 8 && status === 'completed' && (
+                      {index === 7 && status === 'completed' && (
                         <div className="text-center py-2">
                           <CheckCircle size={48} className="mx-auto text-success mb-2" weight="duotone" />
                           <p className="text-sm font-medium text-success">
@@ -1081,8 +1168,8 @@ function App() {
                       <ArrowRight
                         size={28}
                         className={`transform rotate-90 transition-colors duration-300 ${stageStatuses[index] === 'completed'
-                            ? 'text-success'
-                            : 'text-muted-foreground'
+                          ? 'text-success'
+                          : 'text-muted-foreground'
                           }`}
                       />
                     </div>

@@ -1,0 +1,48 @@
+{
+    "baseAnalyzerId": "prebuilt-document",
+    "scenario": "document",
+    "description": "Customs declaration document analyzer for extracting trade compliance fields",
+    "models": {
+        "completion": "gpt-4.1",
+        "embedding": "text-embedding-3-large"
+    },
+    "fieldSchema": {
+        "fields": {
+            "shipper": {
+                "type": "string",
+                "method": "extract",
+                "description": "Name and address of the shipper, sender, exporter, or consignor"
+            },
+            "receiver": {
+                "type": "string",
+                "method": "extract",
+                "description": "Name and address of the receiver, consignee, importer, or buyer"
+            },
+            "goodsDescription": {
+                "type": "string",
+                "method": "extract",
+                "description": "Description of the goods, merchandise, or commodity being shipped"
+            },
+            "value": {
+                "type": "string",
+                "method": "extract",
+                "description": "Declared value or total amount with currency (e.g., 1500.00 USD)"
+            },
+            "countryOfOrigin": {
+                "type": "string",
+                "method": "extract",
+                "description": "Country of origin, manufacture, or production of the goods"
+            },
+            "hsCode": {
+                "type": "string",
+                "method": "extract",
+                "description": "Harmonized System (HS) code, tariff code, or commodity classification"
+            },
+            "weight": {
+                "type": "string",
+                "method": "extract",
+                "description": "Gross or net weight of the shipment with unit (e.g., 25 KG)"
+            }
+        }
+    }
+}

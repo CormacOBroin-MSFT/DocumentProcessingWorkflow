@@ -1,10 +1,14 @@
 """
 OCR Processing Routes
-Handles document analysis with Azure AI Document Intelligence
+Handles document analysis with Azure AI Content Understanding
+Extracts structured customs declaration fields directly from documents
 """
+import logging
 from flask import Blueprint, request, jsonify
-from app.services.azure_doc_intelligence import get_document_intelligence_service
+from app.services.azure_content_understanding import get_content_understanding_service
 from app.config import config
+
+logger = logging.getLogger('autonomousflow.ocr')
 
 bp = Blueprint('ocr', __name__, url_prefix='/api/ocr')
 
@@ -12,6 +16,7 @@ bp = Blueprint('ocr', __name__, url_prefix='/api/ocr')
 def analyze_document():
     """
     Analyze a document using Azure AI Document Intelligence
+    Extracts structured customs declaration fields directly
     
     Expects JSON body:
     {
@@ -20,14 +25,8 @@ def analyze_document():
     }
     
     Returns:
-        JSON with raw_data (key-value pairs) and ocr_confidence
+        JSON with structured_data (customs fields with confidence), raw_data, and ocr_confidence
     """
-    if not config.is_azure_configured():
-        return jsonify({
-            'error': 'Azure Document Intelligence not configured',
-            'mock_mode': True
-        }), 503
-    
     data = request.get_json()
     
     if not data:
@@ -40,19 +39,36 @@ def analyze_document():
         return jsonify({'error': 'blob_url required'}), 400
     
     try:
-        doc_intelligence_service = get_document_intelligence_service()
+        # Use Content Understanding service (which uses Document Intelligence under the hood)
+        ocr_service = get_content_understanding_service()
+        service_name = "Azure Document Intelligence"
         
-        if not doc_intelligence_service:
-            return jsonify({'error': 'Could not initialize document intelligence service'}), 500
+        if not ocr_service:
+            logger.error("No OCR service available")
+            return jsonify({'error': 'No OCR service available'}), 500
         
-        result = doc_intelligence_service.analyze_document(blob_url)
+        logger.info("=" * 60)
+        logger.info("🔍 STAGE 2: OCR + TRANSFORMATION")
+        logger.info("   Content Understanding")
+        logger.info("=" * 60)
+        
+        result = ocr_service.analyze_document(blob_url)
+        
+        structured_data = result.get('structured_data', {})
+        raw_data = result.get('raw_data', {})
+        fields_found = len([f for f in structured_data.values() if f.get('value')])
+        
+        logger.info(f"✅ Extracted {fields_found}/7 fields (confidence: {result['ocr_confidence']:.0%})")
+        logger.info("=" * 60)
         
         return jsonify({
             'document_id': document_id,
-            'raw_data': result['raw_data'],
+            'structured_data': structured_data,
+            'raw_data': raw_data,
             'ocr_confidence': result['ocr_confidence'],
             'status': 'analyzed'
         }), 200
     
     except Exception as e:
+        logger.error(f"OCR analysis failed: {e}")
         return jsonify({'error': str(e)}), 500

@@ -1,22 +1,57 @@
 #!/bin/bash
 
-# Local Development Setup Script
-# Run this to start both frontend and backend locally
+# Local Development Script
+# Starts both frontend and backend, with optional Azure setup
 
 set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "🚀 Starting AutonomousFlow Local Development"
+echo "🚀 AutonomousFlow Local Development"
 echo ""
 
-# Check if backend .env exists
-if [ ! -f "backend/.env" ]; then
-    echo "📝 Creating backend/.env from template..."
-    cp backend/.env.example backend/.env
+# Parse arguments
+SETUP_AZURE=false
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --setup-azure|-a) SETUP_AZURE=true ;;
+        --help|-h)
+            echo "Usage: ./local-dev.sh [options]"
+            echo ""
+            echo "Options:"
+            echo "  --setup-azure, -a   Run Azure setup first (creates resources + .env)"
+            echo "  --help, -h          Show this help"
+            echo ""
+            exit 0
+            ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
+    esac
+    shift
+done
+
+# Run Azure setup if requested or if no .env exists
+if [ "$SETUP_AZURE" = true ]; then
+    echo "📦 Running Azure setup..."
     echo ""
-    echo "⚠️  Edit backend/.env with your credentials (or leave empty for mock mode)"
+    ./setup-azure.sh
     echo ""
-    echo "💡 Tip: Run ./setup-azure.sh to deploy Azure resources and auto-populate .env"
+elif [ ! -f "backend/.env" ]; then
+    echo "⚠️  No backend/.env found."
     echo ""
+    echo "Options:"
+    echo "  1. Run ./setup-azure.sh to create Azure resources"
+    echo "  2. Copy backend/.env.example to backend/.env for mock mode"
+    echo "  3. Run ./local-dev.sh --setup-azure to do both"
+    echo ""
+    read -p "Run Azure setup now? (y/N) " -n 1 -r
+    echo ""
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        ./setup-azure.sh
+        echo ""
+    else
+        echo "📝 Creating backend/.env from template (mock mode)..."
+        cp backend/.env.example backend/.env
+        echo ""
+    fi
 fi
 
 # Setup backend
@@ -39,6 +74,12 @@ cd ..
 # Give backend time to start
 sleep 2
 
+# Check if npm dependencies are installed
+if [ ! -d "node_modules" ]; then
+    echo "📦 Installing npm dependencies..."
+    npm install
+fi
+
 # Start frontend
 echo ""
 echo "⚛️  Starting Vite dev server..."
@@ -52,7 +93,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 echo "   Frontend: http://localhost:5173"
 echo "   Backend:  http://localhost:5000"
-echo "   API Docs: http://localhost:5000/api/health"
+echo "   Health:   http://localhost:5000/api/health"
 echo ""
 echo "Press Ctrl+C to stop both servers"
 echo ""
@@ -60,7 +101,7 @@ echo ""
 # Cleanup on exit
 cleanup() {
     echo ""
-    echo "🛑 Shutting down..."
+    echo "🛑 Shutting down servers..."
     kill $BACKEND_PID 2>/dev/null || true
     kill $FRONTEND_PID 2>/dev/null || true
     exit 0

@@ -23,7 +23,7 @@ A REST API backend for the AI Document Processing demo application, providing se
 ┌─────────────────────────────────────────┐
 │           Azure Services                 │
 │  - Blob Storage (document storage)       │
-│  - AI Document Intelligence (OCR)        │
+│  - AI Content Understanding (OCR)        │
 │  - OpenAI (LLM processing)               │
 └─────────────────────────────────────────┘
 ```
@@ -39,14 +39,14 @@ backend/
 │   │   ├── __init__.py
 │   │   ├── upload.py           # Document upload endpoint
 │   │   ├── storage.py          # Azure Blob Storage endpoints
-│   │   ├── ocr.py              # Document Intelligence endpoints
+│   │   ├── ocr.py              # Content Understanding endpoints
 │   │   ├── transform.py        # LLM data transformation
 │   │   ├── compliance.py       # LLM compliance validation
 │   │   └── customs.py          # Mock customs submission
 │   ├── services/               # Azure service integrations
 │   │   ├── __init__.py
 │   │   ├── azure_blob.py       # Azure Blob Storage client
-│   │   ├── azure_doc_intelligence.py  # Document Intelligence client
+│   │   ├── azure_content_understanding.py  # Content Understanding client
 │   │   └── llm_client.py       # OpenAI LLM client
 │   └── models/                 # Data models (Pydantic)
 │       ├── __init__.py
@@ -66,7 +66,7 @@ backend/
 - pip (Python package manager)
 - Azure account with:
   - Azure Storage Account
-  - Azure AI Document Intelligence resource
+  - Azure AI Content Understanding resource
 - OpenAI API key
 
 ### Installation
@@ -103,13 +103,14 @@ backend/
    AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
    AZURE_STORAGE_CONTAINER=customs-documents
    
-   # Azure AI Document Intelligence
-   AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=https://your-resource.cognitiveservices.azure.com/
-   AZURE_DOCUMENT_INTELLIGENCE_KEY=your_key_here
+   # Azure AI Content Understanding
+   AZURE_CONTENT_UNDERSTANDING_ENDPOINT=https://your-resource.cognitiveservices.azure.com/
+   # AZURE_CONTENT_UNDERSTANDING_KEY=your_key_here  (optional - uses DefaultAzureCredential)
    
-   # OpenAI
-   OPENAI_API_KEY=sk-...
-   OPENAI_MODEL=gpt-4o
+   # Azure OpenAI
+   AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+   AZURE_OPENAI_KEY=your_key_here
+   AZURE_OPENAI_DEPLOYMENT=gpt-4o
    
    # Flask
    FLASK_ENV=development
@@ -516,7 +517,7 @@ def analyze_document():
 ### Azure Services
 
 - **Blob Storage**: ~$0.018/GB/month (first 5GB free)
-- **Document Intelligence**: Free tier = 500 pages/month, then $1.50/1000 pages
+- **Content Understanding**: Free tier = 500 pages/month, then $1.50/1000 pages
 - **OpenAI API**: 
   - GPT-4o: ~$5-15 per 1M tokens input, ~$15-30 per 1M tokens output
   - GPT-4o-mini: ~$0.15-0.60 per 1M tokens
@@ -525,7 +526,7 @@ def analyze_document():
 
 For 1,000 documents/month:
 - Storage: $0.05
-- Document Intelligence: $3.00
+- Content Understanding: $3.00
 - OpenAI (GPT-4o): $10-20
 - **Total**: ~$13-23/month
 
@@ -572,7 +573,7 @@ middleware = FlaskMiddleware(app)
 ## 📚 Additional Resources
 
 - [Azure Storage Python SDK](https://github.com/Azure/azure-sdk-for-python/tree/main/sdk/storage/azure-storage-blob)
-- [Azure AI Document Intelligence](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/)
+- [Azure AI Content Understanding](https://learn.microsoft.com/en-us/azure/ai-services/content-understanding/)
 - [OpenAI Python SDK](https://github.com/openai/openai-python)
 - [Flask Documentation](https://flask.palletsprojects.com/)
 - [Pydantic Documentation](https://docs.pydantic.dev/)

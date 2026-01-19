@@ -5,6 +5,10 @@ set -e
 RESOURCE_GROUP="autonomousflow-rg"
 LOCATION="swedencentral"
 BASE_NAME="autonomousflow"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source shared functions
+source "$SCRIPT_DIR/scripts/setup-analyzer.sh"
 
 echo "🚀 Deploying AutonomousFlow to Azure..."
 echo ""
@@ -36,7 +40,7 @@ APP_URL=$(echo $DEPLOYMENT_OUTPUT | jq -r '.appServiceUrl.value')
 APP_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.appServiceName.value')
 STORAGE_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.storageAccountName.value')
 KV_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.keyVaultName.value')
-DOCINT_ENDPOINT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.documentIntelligenceEndpoint.value')
+CU_ENDPOINT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.contentUnderstandingEndpoint.value')
 
 echo ""
 echo "✅ Infrastructure deployed!"
@@ -44,12 +48,15 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "📊 Resources Created:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "   App Service:          $APP_NAME"
-echo "   Storage Account:      $STORAGE_NAME"  
-echo "   Key Vault:            $KV_NAME"
-echo "   Document Intelligence: $DOCINT_ENDPOINT"
+echo "   App Service:             $APP_NAME"
+echo "   Storage Account:         $STORAGE_NAME"  
+echo "   Key Vault:               $KV_NAME"
+echo "   Content Understanding:   $CU_ENDPOINT"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
+
+# Setup Content Understanding analyzer
+setup_analyzer "$CU_ENDPOINT"
 
 # Build and deploy the application
 echo "🔨 Building application..."
