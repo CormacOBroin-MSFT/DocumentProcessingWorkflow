@@ -31,12 +31,12 @@
             "countryOfOrigin": {
                 "type": "string",
                 "method": "extract",
-                "description": "Country of origin, manufacture, or production of the goods"
+                "description": "Country of origin, manufacture, or production of the goods. Look for variations like: 'Country of Origin', 'Origin Country', 'Made in', 'Manufactured in', 'COO', 'Country of Manufacture', 'Place of Origin', 'Manufacturing Country', or any country names following these terms"
             },
             "hsCode": {
                 "type": "string",
                 "method": "extract",
-                "description": "Harmonized System (HS) code, tariff code, or commodity classification"
+                "description": "Harmonized System (HS) code, tariff code, or commodity classification. Look for variations like: 'HS Code', 'Tariff Code', 'Classification', 'Commodity Code', 'HTS', 'Schedule B', 'Tariff Number', 'HS Number', or any 4-10 digit numeric codes near goods descriptions"
             },
             "weight": {
                 "type": "string",

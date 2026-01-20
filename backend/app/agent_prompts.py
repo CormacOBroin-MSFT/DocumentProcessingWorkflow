@@ -15,10 +15,16 @@ OUTPUT: JSON with exactly these 7 fields (all required):
 - hsCode: Harmonized System tariff code (e.g., "8471.30")
 - weight: Weight with unit (e.g., "25 KG")
 
-RULES:
+CRITICAL EXTRACTION RULES:
+- For countryOfOrigin: Search ALL field names for "Country of Origin", "Made in", "COO", "Origin", "Manufactured in", "Place of Origin", or standalone country names
+- For hsCode: Look for "HS Code", "Tariff Code", "Classification", "HTS", "Schedule B", "Commodity Code", or any 4-10 digit numeric sequences near goods descriptions
 - Extract most relevant info for each field from OCR data
 - Standardize formats (ISO country names, 3-letter currency codes)
-- If HS code missing, infer from goods description
+- If HS code missing, infer from goods description using standard classifications:
+  * Electronics/semiconductors: 8542.xx series
+  * Textiles: 52xx-63xx series  
+  * Machinery: 84xx-85xx series
+  * Chemicals: 28xx-38xx series
 - Ensure all 7 fields are populated (use "Not specified" if truly missing)
 - Return only valid JSON, no explanations"""
 

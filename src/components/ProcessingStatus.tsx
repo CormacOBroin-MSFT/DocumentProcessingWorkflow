@@ -38,7 +38,7 @@ export const ProcessingStatus: FC<ProcessingStatusProps> = ({
                 {/* Document Preview */}
                 {document && (
                     <div className="mb-8 flex justify-center">
-                        <div className="w-48 h-32 rounded-lg overflow-hidden border shadow-sm">
+                        <div className="w-80 h-96 rounded-lg overflow-hidden border shadow-sm bg-white">
                             <DocumentPreview
                                 fileUrl={document.fileUrl}
                                 fileName={document.fileName}
@@ -54,12 +54,12 @@ export const ProcessingStatus: FC<ProcessingStatusProps> = ({
                         <div key={step.id} className="flex items-center gap-4">
                             <div
                                 className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${step.status === 'complete'
-                                        ? 'bg-success text-white'
-                                        : step.status === 'in-progress'
-                                            ? 'bg-processing text-white'
-                                            : step.status === 'error'
-                                                ? 'bg-destructive text-white'
-                                                : 'bg-muted text-muted-foreground'
+                                    ? 'bg-success text-white'
+                                    : step.status === 'in-progress'
+                                        ? 'bg-processing text-white'
+                                        : step.status === 'error'
+                                            ? 'bg-destructive text-white'
+                                            : 'bg-muted text-muted-foreground'
                                     }`}
                             >
                                 {step.status === 'complete' ? (
@@ -74,12 +74,12 @@ export const ProcessingStatus: FC<ProcessingStatusProps> = ({
                             </div>
                             <span
                                 className={`text-sm ${step.status === 'complete'
-                                        ? 'text-success font-medium'
-                                        : step.status === 'in-progress'
-                                            ? 'text-processing font-medium'
-                                            : step.status === 'error'
-                                                ? 'text-destructive'
-                                                : 'text-muted-foreground'
+                                    ? 'text-success font-medium'
+                                    : step.status === 'in-progress'
+                                        ? 'text-processing font-medium'
+                                        : step.status === 'error'
+                                            ? 'text-destructive'
+                                            : 'text-muted-foreground'
                                     }`}
                             >
                                 {step.label}

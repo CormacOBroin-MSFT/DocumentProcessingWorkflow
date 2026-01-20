@@ -72,7 +72,7 @@ export const COMPLIANCE_TO_FIELD: Record<number, string> = {
 export const WORKFLOW_STAGES = [
     { name: 'Upload Document', label: 'Document Intake' },
     { name: 'Azure Storage', label: 'Data Collection' },
-    { name: 'OCR + Transformation', label: 'Content Understanding' },
+    { name: 'Content Understanding', label: 'OCR + Transformation' },
     { name: 'Customs Fields', label: 'Declaration Data' },
     { name: 'Compliance Check', label: 'Automated Validation' },
     { name: 'Approval Workflow', label: 'Human Review' },

@@ -122,7 +122,7 @@ function App() {
     () => [
       { name: 'Upload Document', icon: CloudArrowUp, label: 'Document Intake' },
       { name: 'Azure Storage', icon: Database, label: 'Data Collection' },
-      { name: 'OCR + Transformation', icon: ScanSmiley, label: 'Content Understanding' },
+      { name: 'Content Understanding', icon: ScanSmiley, label: 'OCR + Transformation' },
       { name: 'Customs Fields', icon: TextAlignLeft, label: 'Declaration Data' },
       { name: 'Compliance Check', icon: ShieldCheck, label: 'Automated Validation' },
       { name: 'Approval Workflow', icon: UserCheck, label: 'Human Review' },
@@ -917,9 +917,9 @@ function App() {
                             {document.fileType === 'application/pdf' ||
                               document.fileName?.toLowerCase().endsWith('.pdf') ? (
                               <iframe
-                                src={`${document.fileUrl}#toolbar=0&navpanes=0&scrollbar=1&zoom=page-fit`}
+                                src={`${document.fileUrl}#toolbar=1&navpanes=0&scrollbar=1&view=FitH`}
                                 title={document.fileName}
-                                className="w-full h-full border-0"
+                                className="w-full h-full border-0 bg-white"
                               />
                             ) : (
                               <img

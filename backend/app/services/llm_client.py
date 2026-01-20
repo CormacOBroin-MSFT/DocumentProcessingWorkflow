@@ -78,6 +78,10 @@ Required fields in structured_data:
 - hsCode: {{"value": "harmonized system code", "confidence": 0.0-1.0}}
 - weight: {{"value": "weight with unit", "confidence": 0.0-1.0}}
 
+Field Extraction Guidelines:
+- countryOfOrigin: Search for "Country of Origin", "Made in", "COO", "Origin", "Manufactured in", or standalone country names
+- hsCode: Look for "HS Code", "Tariff Code", "Classification", "HTS", "Schedule B", or 4-10 digit numeric codes
+
 Confidence Guidelines:
 - 0.9-1.0: Explicitly stated and clear in document
 - 0.7-0.9: Clearly derivable from context  

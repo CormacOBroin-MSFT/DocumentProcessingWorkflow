@@ -165,6 +165,17 @@ else
   log_warning "Could not get user ID for role assignments"
 fi
 
+# Configure storage account network access
+log_step "Configuring storage account network access..."
+echo "   Enabling public network access (required for development)"
+az storage account update \
+  --name $STORAGE_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --public-network-access Enabled \
+  --output none
+
+log_success "Storage account configured for secure access"
+
 # Create .env file
 ENV_FILE="backend/.env"
 log_step "Creating $ENV_FILE..."
@@ -196,6 +207,9 @@ echo "   AI Services:         $AI_SERVICES_NAME"
 echo "   OpenAI Deployment:   $OPENAI_DEPLOYMENT"
 echo "   CU Endpoint:         $CU_ENDPOINT"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+log_warning "Note: Public network access on storage may be disabled daily by subscription policy."
+log_warning "If uploads fail, re-run this script to restore network access."
 echo ""
 
 # Setup Content Understanding analyzer
