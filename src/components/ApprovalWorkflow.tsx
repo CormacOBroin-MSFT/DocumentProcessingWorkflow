@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -18,41 +18,12 @@ import {
     FloppyDisk,
     Sparkle,
 } from '@phosphor-icons/react'
-
-// Types
-export type CustomsDeclaration = {
-    shipper: string
-    receiver: string
-    goodsDescription: string
-    value: string
-    countryOfOrigin: string
-    hsCode: string
-    weight: string
-}
-
-export type FieldConfidence = {
-    value: string
-    confidence: number
-}
-
-export type StructuredDataWithConfidence = {
-    shipper: FieldConfidence
-    receiver: FieldConfidence
-    goodsDescription: FieldConfidence
-    value: FieldConfidence
-    countryOfOrigin: FieldConfidence
-    hsCode: FieldConfidence
-    weight: FieldConfidence
-}
-
-export type ComplianceIssue = {
-    field: keyof CustomsDeclaration
-    type: 'missing' | 'invalid' | 'ambiguous' | 'low_confidence'
-    title: string
-    description: string
-    hint: string
-    checkIndex?: number // Index in compliance checks array
-}
+import type {
+    CustomsDeclaration,
+    StructuredDataWithConfidence,
+    ComplianceIssue,
+} from '@/types/customs'
+import { FIELD_LABELS, FIELD_HINTS, COMPLIANCE_TO_FIELD } from '@/constants'
 
 export type ApprovalWorkflowProps = {
     documentId?: string
@@ -66,27 +37,7 @@ export type ApprovalWorkflowProps = {
     onSaveDraft: (data: CustomsDeclaration, reviewerNotes: string) => void
     onReturnToAutomation: (reason: string, comment: string) => void
     onCancel: () => void
-}
-
-// Field metadata for display
-const FIELD_LABELS: Record<keyof CustomsDeclaration, string> = {
-    shipper: 'Exporter / Shipper',
-    receiver: 'Importer / Receiver',
-    goodsDescription: 'Goods Description',
-    value: 'Declared Value',
-    countryOfOrigin: 'Country of Origin',
-    hsCode: 'HS Code',
-    weight: 'Weight',
-}
-
-const FIELD_HINTS: Record<keyof CustomsDeclaration, string> = {
-    shipper: 'Full legal name and address of the exporting party',
-    receiver: 'Full legal name and address of the importing party',
-    goodsDescription: 'Detailed description of goods being shipped',
-    value: 'Transaction value in currency (e.g., 1500.00 EUR)',
-    countryOfOrigin: 'Country where goods were manufactured or produced',
-    hsCode: 'Harmonized System code for tariff classification',
-    weight: 'Gross weight with unit (e.g., 25 KG)',
+    onConfidenceChange?: (ocr: number, compliance: number) => void
 }
 
 // Compliance check names
@@ -97,15 +48,6 @@ const COMPLIANCE_CHECK_NAMES = [
     'Shipper Verification',
     'Document Completeness',
 ]
-
-// Map compliance checks to fields
-const COMPLIANCE_TO_FIELD: Record<number, keyof CustomsDeclaration> = {
-    0: 'hsCode',
-    1: 'countryOfOrigin',
-    2: 'value',
-    3: 'shipper',
-    // 4 is document completeness - affects multiple fields
-}
 
 export function ApprovalWorkflow({
     documentId,
@@ -119,6 +61,7 @@ export function ApprovalWorkflow({
     onSaveDraft,
     onReturnToAutomation,
     onCancel,
+    onConfidenceChange,
 }: ApprovalWorkflowProps) {
     // Editable data state
     const [editedData, setEditedData] = useState<CustomsDeclaration>(structuredData)
@@ -136,6 +79,7 @@ export function ApprovalWorkflow({
     // Track initial issues - computed once on mount and when compliance checks change
     // but NOT when editedData changes (so cards don't disappear while editing)
     const [initialIssues, setInitialIssues] = useState<ComplianceIssue[] | null>(null)
+    const hasInitializedRef = useRef(false)
 
     // Detect issues from compliance checks and data quality
     const computeIssues = (data: CustomsDeclaration): ComplianceIssue[] => {
@@ -159,17 +103,18 @@ export function ApprovalWorkflow({
         // Check compliance failures
         complianceChecks.forEach((passed, index) => {
             if (!passed && complianceDescriptions[index]) {
-                const field = COMPLIANCE_TO_FIELD[index]
+                const fieldName = COMPLIANCE_TO_FIELD[index]
+                const field = (fieldName || 'goodsDescription') as keyof CustomsDeclaration
                 // Don't duplicate if we already have a missing field issue
-                const alreadyHasIssue = field && detectedIssues.some(i => i.field === field)
+                const alreadyHasIssue = detectedIssues.some(i => i.field === field)
 
                 if (!alreadyHasIssue) {
                     detectedIssues.push({
-                        field: field || 'goodsDescription', // Default to goods if no specific field
+                        field,
                         type: 'invalid',
                         title: COMPLIANCE_CHECK_NAMES[index],
                         description: complianceDescriptions[index],
-                        hint: field ? FIELD_HINTS[field] : 'Please review and correct this field.',
+                        hint: FIELD_HINTS[field] || 'Please review and correct this field.',
                         checkIndex: index,
                     })
                 }
@@ -195,9 +140,10 @@ export function ApprovalWorkflow({
         return detectedIssues
     }
 
-    // Initialize issues once on mount
-    useMemo(() => {
-        if (initialIssues === null) {
+    // Initialize issues once on mount (using useEffect instead of useMemo to set state)
+    useEffect(() => {
+        if (!hasInitializedRef.current) {
+            hasInitializedRef.current = true
             setInitialIssues(computeIssues(structuredData))
         }
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -250,7 +196,7 @@ export function ApprovalWorkflow({
         // Blend original confidence with human verification boost
         const verificationBoost = verifiedFields / totalFields
         return Math.min(1, extractionConfidence + (verificationBoost * (1 - extractionConfidence)))
-    }, [extractionConfidence, approvedFields, editedFields, editedData])
+    }, [extractionConfidence, approvedFields.size, editedFields.size, editedData])
 
     const adjustedComplianceConfidence = useMemo(() => {
         const totalIssues = issues.length
@@ -259,7 +205,25 @@ export function ApprovalWorkflow({
         // Blend original confidence with resolution boost
         const resolutionBoost = resolvedIssues / totalIssues
         return Math.min(1, complianceConfidence + (resolutionBoost * (1 - complianceConfidence)))
-    }, [complianceConfidence, issues, approvedFields, editedFields, editedData])
+    }, [complianceConfidence, issues, approvedFields.size, editedFields.size])
+
+    // Track previous confidence values to prevent infinite loops
+    const prevConfidenceRef = useRef({ ocr: -1, compliance: -1 })
+
+    // Notify parent when confidence changes (only from user interaction, not prop changes)
+    useEffect(() => {
+        const prev = prevConfidenceRef.current
+        // Only notify if values actually changed and it's not the initial render
+        if (
+            onConfidenceChange &&
+            prev.ocr !== -1 &&
+            (Math.abs(prev.ocr - adjustedExtractionConfidence) > 0.001 ||
+             Math.abs(prev.compliance - adjustedComplianceConfidence) > 0.001)
+        ) {
+            onConfidenceChange(adjustedExtractionConfidence, adjustedComplianceConfidence)
+        }
+        prevConfidenceRef.current = { ocr: adjustedExtractionConfidence, compliance: adjustedComplianceConfidence }
+    }, [approvedFields.size, editedFields.size]) // Only trigger on user actions, not prop changes
 
     // Validation check
     const canApprove = useMemo(() => {
