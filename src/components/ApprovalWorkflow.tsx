@@ -218,7 +218,7 @@ export function ApprovalWorkflow({
             onConfidenceChange &&
             prev.ocr !== -1 &&
             (Math.abs(prev.ocr - adjustedExtractionConfidence) > 0.001 ||
-             Math.abs(prev.compliance - adjustedComplianceConfidence) > 0.001)
+                Math.abs(prev.compliance - adjustedComplianceConfidence) > 0.001)
         ) {
             onConfidenceChange(adjustedExtractionConfidence, adjustedComplianceConfidence)
         }
@@ -406,17 +406,6 @@ export function ApprovalWorkflow({
                                                             placeholder={issue.hint}
                                                             className={`flex-1 ${resolved ? 'border-success' : !editedData[issue.field] ? 'border-warning' : ''}`}
                                                         />
-                                                        {!resolved && hasValue && (
-                                                            <Button
-                                                                size="icon"
-                                                                variant="ghost"
-                                                                className="h-9 w-9 text-success hover:bg-success/10"
-                                                                onClick={() => handleApproveField(issue.field)}
-                                                                title="Verify this value is correct"
-                                                            >
-                                                                <CheckCircle size={18} weight="bold" />
-                                                            </Button>
-                                                        )}
                                                     </div>
                                                     <p className="text-xs text-muted-foreground">{issue.hint}</p>
                                                 </div>

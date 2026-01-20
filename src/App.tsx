@@ -867,8 +867,8 @@ function App() {
       </header>
 
       {/* Main Content */}
-      <main className="p-8">
-        <div className="max-w-4xl mx-auto">
+      <main className={`${workflowMode === 'automated' && automatedStep === 'approval' ? 'p-4 lg:p-6' : 'p-8'}`}>
+        <div className={`mx-auto ${workflowMode === 'automated' && automatedStep === 'approval' ? 'max-w-none' : 'max-w-4xl'}`}>
           {/* Automated Workflow */}
           {workflowMode === 'automated' && (
             <div className="space-y-6">
@@ -899,25 +899,62 @@ function App() {
                 />
               )}
 
-              {/* Approval Step */}
+              {/* Approval Step - Side by Side Layout */}
               {automatedStep === 'approval' && showApproval && (
-                <ApprovalWorkflow
-                  structuredData={document?.structuredData || editedData || defaultStructuredData}
-                  rawDataWithConfidence={rawDataWithConfidence}
-                  complianceChecks={complianceChecks}
-                  complianceDescriptions={complianceDescriptions}
-                  extractionConfidence={document?.confidenceScores?.ocr || 0}
-                  complianceConfidence={document?.confidenceScores?.compliance || 0}
-                  onApprove={handleApprovalComplete}
-                  onSaveDraft={handleSaveDraft}
-                  onReturnToAutomation={handleReturnToAutomation}
-                  onConfidenceChange={handleConfidenceChange}
-                  onCancel={() => {
-                    setShowApproval(false)
-                    setAutomatedStep('idle')
-                    resetWorkflow()
-                  }}
-                />
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8">
+                  {/* Left: Original Document */}
+                  <div className="lg:sticky lg:top-24 lg:self-start">
+                    <Card className="shadow-lg overflow-hidden">
+                      <div className="px-4 py-2 border-b bg-muted/30">
+                        <h3 className="font-semibold text-sm">Original Document</h3>
+                        <p className="text-xs text-muted-foreground">
+                          {document?.fileName || 'Uploaded document'}
+                        </p>
+                      </div>
+                      <div className="p-2">
+                        {document && (
+                          <div className="w-full rounded-lg overflow-hidden border bg-white" style={{ height: 'calc(100vh - 200px)', minHeight: '400px' }}>
+                            {document.fileType === 'application/pdf' ||
+                              document.fileName?.toLowerCase().endsWith('.pdf') ? (
+                              <iframe
+                                src={`${document.fileUrl}#toolbar=0&navpanes=0&scrollbar=1&zoom=page-fit`}
+                                title={document.fileName}
+                                className="w-full h-full border-0"
+                              />
+                            ) : (
+                              <img
+                                src={document.fileUrl}
+                                alt={document.fileName}
+                                className="w-full h-full object-contain"
+                              />
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </Card>
+                  </div>
+
+                  {/* Right: Approval Workflow */}
+                  <div className="space-y-6">
+                    <ApprovalWorkflow
+                      structuredData={document?.structuredData || editedData || defaultStructuredData}
+                      rawDataWithConfidence={rawDataWithConfidence}
+                      complianceChecks={complianceChecks}
+                      complianceDescriptions={complianceDescriptions}
+                      extractionConfidence={document?.confidenceScores?.ocr || 0}
+                      complianceConfidence={document?.confidenceScores?.compliance || 0}
+                      onApprove={handleApprovalComplete}
+                      onSaveDraft={handleSaveDraft}
+                      onReturnToAutomation={handleReturnToAutomation}
+                      onConfidenceChange={handleConfidenceChange}
+                      onCancel={() => {
+                        setShowApproval(false)
+                        setAutomatedStep('idle')
+                        resetWorkflow()
+                      }}
+                    />
+                  </div>
+                </div>
               )}
 
               {/* Complete Step */}
