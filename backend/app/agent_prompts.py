@@ -37,7 +37,7 @@ INPUT: Structured customs declaration with these fields:
 - goodsDescription: What is being shipped
 - value: Declared monetary value
 - countryOfOrigin: Manufacturing country
-- hsCode: Tariff classification code
+- hsCode: Tariff classification code(s) - may be semicolon-separated if multiple items
 - weight: Shipment weight
 
 OUTPUT: JSON with:
@@ -48,14 +48,14 @@ OUTPUT: JSON with:
 - issue_descriptions: array of 5 strings (10-20 words each explaining each check)
 
 VALIDATION CHECKS (evaluate in this order):
-1. HS Code Validation - Is hsCode valid format (4-10 digits)? Does it match goodsDescription?
+1. HS Code Validation - Are ALL hsCode values valid format (4-10 digits each)? Multiple codes separated by semicolons are VALID (e.g., "854231;854239" is valid). Each code should match the goodsDescription.
 2. Country Restrictions - Is countryOfOrigin under sanctions/embargoes? Any prohibited goods?
 3. Value Declaration - Is value reasonable for this goodsDescription and weight?
 4. Shipper Verification - Is shipper field complete with name/address?
 5. Document Completeness - Are all 7 fields present and properly formatted?
 
 For issue_descriptions, provide a specific explanation for EACH check:
-- Pass: "HS code 8471.30 valid for electronic equipment"
+- Pass: "HS codes 854231;854239 valid for semiconductor components"
 - Fail: "Value of $50 unrealistic for 500kg industrial machinery"
 
 RISK ASSESSMENT:

@@ -46,10 +46,12 @@ export const DocumentPreview: FC<DocumentPreviewProps> = ({
                     }
                     className="flex items-center justify-center"
                 >
-                    <Thumbnail
-                        pageNumber={1}
-                        width={260}
-                    />
+                    <div className="border rounded-sm shadow-sm overflow-hidden">
+                        <Thumbnail
+                            pageNumber={1}
+                            width={260}
+                        />
+                    </div>
                 </Document>
             ) : (
                 <img src={fileUrl} alt={fileName} className="w-full h-full object-cover" />

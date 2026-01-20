@@ -1,10 +1,17 @@
 {
     "baseAnalyzerId": "prebuilt-document",
     "scenario": "document",
-    "description": "Customs declaration document analyzer for extracting trade compliance fields",
+    "description": "Customs declaration document analyzer for extracting trade compliance fields with enhanced table extraction",
     "models": {
         "completion": "gpt-4.1",
         "embedding": "text-embedding-3-large"
+    },
+    "config": {
+        "returnDetails": true,
+        "enableFormula": false,
+        "disableContentFiltering": false,
+        "estimateFieldSourceAndConfidence": true,
+        "tableFormat": "html"
     },
     "fieldSchema": {
         "fields": {
@@ -21,27 +28,27 @@
             "goodsDescription": {
                 "type": "string",
                 "method": "extract",
-                "description": "Description of the goods, merchandise, or commodity being shipped"
+                "description": "Description of all goods, merchandise, or commodities being shipped. Combine multiple items with semicolons."
             },
             "value": {
                 "type": "string",
                 "method": "extract",
-                "description": "Declared value or total amount with currency (e.g., 1500.00 USD)"
+                "description": "Total declared value with currency (e.g., USD 216,000). Look for 'Total Invoice Value', 'Total Value', or 'Amount'."
             },
             "countryOfOrigin": {
                 "type": "string",
                 "method": "extract",
-                "description": "Country of origin, manufacture, or production of the goods. Look for variations like: 'Country of Origin', 'Origin Country', 'Made in', 'Manufactured in', 'COO', 'Country of Manufacture', 'Place of Origin', 'Manufacturing Country', or any country names following these terms"
+                "description": "Country where goods were manufactured or originated. If not explicitly stated, derive from exporter country (e.g., USA if exporter is in Austin, TX, USA). Look for 'Country of Origin', 'Origin', 'Made in', 'Manufactured in', or exporter location."
             },
             "hsCode": {
                 "type": "string",
                 "method": "extract",
-                "description": "Harmonized System (HS) code, tariff code, or commodity classification. Look for variations like: 'HS Code', 'Tariff Code', 'Classification', 'Commodity Code', 'HTS', 'Schedule B', 'Tariff Number', 'HS Number', or any 4-10 digit numeric codes near goods descriptions"
+                "description": "ALL Harmonized System (HS) codes from the document, separated by semicolons. Extract from table columns labeled 'HS Code', 'Tariff Code', or 'HTS'. These are 6-digit numbers like 854231 or 854239. Combine all codes found."
             },
             "weight": {
                 "type": "string",
                 "method": "extract",
-                "description": "Gross or net weight of the shipment with unit (e.g., 25 KG)"
+                "description": "Total gross weight of the shipment with unit (e.g., 112 kg). Look for 'Total Gross Weight' or 'Weight'."
             }
         }
     }

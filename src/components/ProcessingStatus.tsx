@@ -38,7 +38,7 @@ export const ProcessingStatus: FC<ProcessingStatusProps> = ({
                 {/* Document Preview */}
                 {document && (
                     <div className="mb-8 flex justify-center">
-                        <div className="w-80 h-96 rounded-lg overflow-hidden border shadow-sm bg-white">
+                        <div className="w-80 h-96 rounded-lg overflow-hidden bg-transparent">
                             <DocumentPreview
                                 fileUrl={document.fileUrl}
                                 fileName={document.fileName}

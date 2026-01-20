@@ -151,6 +151,24 @@ class AzureContentUnderstandingService:
             content = contents[0]
             fields = content.get('fields', {})
             
+            # Log the raw fields for debugging
+            logger.info("=== Content Understanding Raw Response ===")
+            logger.info(f"Fields received: {list(fields.keys())}")
+            for field_name, field_data in fields.items():
+                logger.info(f"  {field_name}: {field_data}")
+            
+            # Also log the markdown content to see what was extracted
+            markdown = content.get('markdown', '')
+            if markdown:
+                logger.info(f"Markdown content (first 1000 chars):\n{markdown[:1000]}")
+            
+            # Log tables if present
+            tables = content.get('tables', [])
+            if tables:
+                logger.info(f"Tables found: {len(tables)}")
+                for i, table in enumerate(tables[:2]):  # Log first 2 tables
+                    logger.info(f"  Table {i}: {table}")
+            
             # Build structured data from extracted fields
             structured_data: Dict[str, Dict[str, Any]] = {}
             confidences = []
