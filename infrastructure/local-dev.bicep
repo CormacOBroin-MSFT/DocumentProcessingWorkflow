@@ -110,9 +110,67 @@ resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2
   }
 }
 
+// Cosmos DB Account for storing processed customs declarations
+resource cosmosDbAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
+  name: '${baseName}-cosmos'
+  location: location
+  kind: 'GlobalDocumentDB'
+  properties: {
+    databaseAccountOfferType: 'Standard'
+    consistencyPolicy: {
+      defaultConsistencyLevel: 'Session'
+    }
+    locations: [
+      {
+        locationName: location
+        failoverPriority: 0
+        isZoneRedundant: false
+      }
+    ]
+    capabilities: [
+      {
+        name: 'EnableServerless'
+      }
+    ]
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+// Cosmos DB Database
+resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-05-15' = {
+  parent: cosmosDbAccount
+  name: 'customs-workflow'
+  properties: {
+    resource: {
+      id: 'customs-workflow'
+    }
+  }
+}
+
+// Cosmos DB Container for customs declarations
+resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: cosmosDatabase
+  name: 'declarations'
+  properties: {
+    resource: {
+      id: 'declarations'
+      partitionKey: {
+        paths: ['/documentId']
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        automatic: true
+        indexingMode: 'consistent'
+      }
+    }
+  }
+}
+
 // Outputs
 output storageAccountName string = storageAccount.name
 output contentUnderstandingEndpoint string = aiFoundry.properties.endpoint
 output aiServicesName string = aiFoundry.name
 output openAIEndpoint string = aiFoundry.properties.endpoint
 output openAIDeploymentName string = gpt41Deployment.name
+output cosmosDbEndpoint string = cosmosDbAccount.properties.documentEndpoint
+output cosmosDbAccountName string = cosmosDbAccount.name

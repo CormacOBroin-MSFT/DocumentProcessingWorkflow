@@ -246,6 +246,62 @@ export async function performComplianceCheck(data: CustomsDeclaration): Promise<
     }
 }
 
+// Cosmos DB Storage Response Schema
+const CosmosStoreResponseSchema = z.object({
+    documentId: z.string().optional(),
+    id: z.string().optional(),
+    status: z.string(),
+    createdAt: z.string().optional(),
+    message: z.string().optional(),
+})
+
+// Store declaration in Cosmos DB
+export async function storeInCosmosDB(data: {
+    documentId?: string
+    fileName?: string
+    blobUrl?: string
+    structuredData: CustomsDeclaration
+    confidenceScores?: { ocr: number; structure: number; compliance: number }
+    complianceChecks?: boolean[]
+    complianceDescriptions?: string[]
+    approvalStatus?: string
+    reviewerNotes?: string
+    submissionId?: string
+}): Promise<{
+    documentId: string
+    status: string
+    createdAt?: string
+    message?: string
+}> {
+    const response = await fetch(`${API_CONFIG.BASE_URL}/api/cosmosdb/store`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    })
+
+    if (!response.ok) {
+        let errorMessage = `Cosmos DB storage failed: ${response.statusText}`
+        try {
+            const errorData = await response.json()
+            if (errorData.error) {
+                errorMessage = errorData.error
+            }
+        } catch {
+            // Use default error message
+        }
+        throw new Error(errorMessage)
+    }
+
+    const result = CosmosStoreResponseSchema.parse(await response.json())
+
+    return {
+        documentId: result.documentId || result.id || '',
+        status: result.status,
+        createdAt: result.createdAt,
+        message: result.message,
+    }
+}
+
 // ----- React Query Hooks -----
 
 // Query key factory

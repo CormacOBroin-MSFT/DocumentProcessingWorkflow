@@ -22,6 +22,11 @@ class Config:
     AZURE_OPENAI_KEY: Optional[str] = os.getenv('AZURE_OPENAI_KEY')
     AZURE_OPENAI_DEPLOYMENT: str = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-4o')
     
+    # Azure Cosmos DB
+    AZURE_COSMOS_ENDPOINT: Optional[str] = os.getenv('AZURE_COSMOS_ENDPOINT')
+    AZURE_COSMOS_DATABASE: str = os.getenv('AZURE_COSMOS_DATABASE', 'customs-workflow')
+    AZURE_COSMOS_CONTAINER: str = os.getenv('AZURE_COSMOS_CONTAINER', 'declarations')
+    
     FLASK_ENV: str = os.getenv('FLASK_ENV', 'development')
     FLASK_DEBUG: bool = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     
@@ -40,6 +45,11 @@ class Config:
             cls.AZURE_OPENAI_ENDPOINT and
             cls.AZURE_OPENAI_DEPLOYMENT
         )
+    
+    @classmethod
+    def is_cosmos_configured(cls) -> bool:
+        """Check if Azure Cosmos DB is properly configured"""
+        return bool(cls.AZURE_COSMOS_ENDPOINT)
     
     @classmethod
     def get_ocr_service_type(cls) -> str:

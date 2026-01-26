@@ -44,6 +44,7 @@ import {
   analyzeDocument,
   transformToStructuredData,
   performComplianceCheck,
+  storeInCosmosDB,
 } from '@/api/documents'
 
 // Types and Constants
@@ -653,27 +654,57 @@ function App() {
       setShowApproval(false)
       toast.success('Declaration approved and locked')
 
-      // In automated mode, continue to submission
-      if (workflowMode === 'automated') {
-        setAutomatedStep('complete')
-        setProcessingStatus('Submitting to customs authority...')
-        await new Promise((resolve) => setTimeout(resolve, 1500))
-        setProcessingStatus('Storing in analytics...')
-        await new Promise((resolve) => setTimeout(resolve, 1000))
-        setProcessingStatus('Workflow complete!')
-        setIsAutomatedRunning(false)
-        toast.success('Document submitted and stored successfully!')
-        return
-      }
-
-      // Manual mode - continue with stages
+      // Continue to submission stages (both automated and manual modes)
       updateStageStatus(5, 'completed')
       advanceToStage(6)
-      if (isAutomatedRunning) {
-        setTimeout(() => handleSubmitToCustoms(), 800)
+      
+      // In automated mode, continue through submission and CosmosDB storage
+      if (workflowMode === 'automated' && isAutomatedRunning) {
+        setAutomatedStep('complete')
+        
+        // Stage 6: Submit to Customs
+        setProcessingStatus('Submitting to customs authority...')
+        updateStageStatus(6, 'processing')
+        setShowSubmitAnimation(true)
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+        setShowSubmitAnimation(false)
+        updateStageStatus(6, 'completed')
+        advanceToStage(7)
+        
+        // Stage 7: Store in CosmosDB
+        setProcessingStatus('Storing in CosmosDB...')
+        updateStageStatus(7, 'processing')
+        await new Promise((resolve) => setTimeout(resolve, 800))
+        
+        try {
+          const dataToStore = {
+            documentId: document?.blobUrl?.split('/').pop()?.split('?')[0] || `doc-${Date.now()}`,
+            fileName: document?.fileName,
+            blobUrl: document?.blobUrl,
+            structuredData: data,
+            confidenceScores: document?.confidenceScores,
+            complianceChecks,
+            complianceDescriptions,
+            approvalStatus: 'approved',
+            reviewerNotes: notes,
+            submissionId: `CUSTOMS-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+          }
+          
+          await storeInCosmosDB(dataToStore)
+          
+          updateStageStatus(7, 'completed')
+          setProcessingStatus('Workflow complete!')
+          toast.success('Declaration stored in Cosmos DB')
+        } catch (error) {
+          console.error('Cosmos DB storage failed:', error)
+          toast.error(`Storage failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+          updateStageStatus(7, 'active')
+        }
+        
+        setIsAutomatedRunning(false)
       }
     },
-    [document, workflowMode, updateStageStatus, advanceToStage, isAutomatedRunning]
+    [document, workflowMode, updateStageStatus, advanceToStage, isAutomatedRunning, complianceChecks, complianceDescriptions]
   )
 
   // Handle confidence updates from ApprovalWorkflow
@@ -750,13 +781,44 @@ function App() {
     }, 2000)
   }, [updateStageStatus, advanceToStage, workflowMode, isAutomatedRunning])
 
-  const handleStoreInCosmosDB = useCallback(() => {
+  const handleStoreInCosmosDB = useCallback(async () => {
     updateStageStatus(7, 'processing')
-    setTimeout(() => {
+    
+    try {
+      // Prepare data for Cosmos DB
+      const dataToStore = {
+        documentId: document?.blobUrl?.split('/').pop()?.split('?')[0] || `doc-${Date.now()}`,
+        fileName: document?.fileName,
+        blobUrl: document?.blobUrl,
+        structuredData: editedData || document?.structuredData || {
+          shipper: '',
+          receiver: '',
+          goodsDescription: '',
+          value: '',
+          countryOfOrigin: '',
+          hsCode: '',
+          weight: '',
+        },
+        confidenceScores: document?.confidenceScores,
+        complianceChecks,
+        complianceDescriptions,
+        approvalStatus: approvalStatus,
+        reviewerNotes: reviewerNotes,
+        submissionId: `CUSTOMS-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+      }
+      
+      const result = await storeInCosmosDB(dataToStore)
+      
+      toast.success('Declaration stored in Cosmos DB')
+      
       updateStageStatus(7, 'completed')
       setIsAutomatedRunning(false)
-    }, 1500)
-  }, [updateStageStatus])
+    } catch (error) {
+      console.error('Cosmos DB storage failed:', error)
+      toast.error(`Storage failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      updateStageStatus(7, 'active')
+    }
+  }, [updateStageStatus, document, editedData, complianceChecks, complianceDescriptions, approvalStatus, reviewerNotes])
 
   // ----- Status Badge -----
 

@@ -23,6 +23,7 @@ fi
 echo "⚠️  This will DELETE all resources in '$RESOURCE_GROUP':"
 echo "   • Storage Account"
 echo "   • AI Services (Content Understanding)"
+echo "   • Cosmos DB Account (and all data)"
 echo ""
 read -p "Are you sure? (y/N) " -n 1 -r
 echo ""

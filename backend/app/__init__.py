@@ -43,6 +43,7 @@ def create_app():
     logger.info(f"OCR Service: {config.get_ocr_service_type()}")
     logger.info(f"Azure OpenAI configured: {bool(config.AZURE_OPENAI_ENDPOINT)}")
     logger.info(f"Azure OpenAI deployment: {config.AZURE_OPENAI_DEPLOYMENT}")
+    logger.info(f"Azure Cosmos DB configured: {bool(config.AZURE_COSMOS_ENDPOINT)}")
     
     # CORS only needed in development (when frontend runs separately)
     if os.environ.get('FLASK_ENV') == 'development' or not has_static:
@@ -86,14 +87,16 @@ def create_app():
         return jsonify({
             'azureConfigured': config.is_azure_configured(),
             'openaiConfigured': config.is_openai_configured(),
+            'cosmosConfigured': config.is_cosmos_configured(),
             'services': {
                 'storage': bool(config.AZURE_STORAGE_CONNECTION_STRING),
                 'documentIntelligence': bool(config.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT),
-                'openai': bool(config.AZURE_OPENAI_ENDPOINT)
+                'openai': bool(config.AZURE_OPENAI_ENDPOINT),
+                'cosmosdb': bool(config.AZURE_COSMOS_ENDPOINT)
             }
         })
     
-    from app.routes import upload, storage, ocr, transform, compliance, customs
+    from app.routes import upload, storage, ocr, transform, compliance, customs, cosmosdb
     
     app.register_blueprint(upload.bp)
     app.register_blueprint(storage.bp)
@@ -101,6 +104,7 @@ def create_app():
     app.register_blueprint(transform.bp)
     app.register_blueprint(compliance.bp)
     app.register_blueprint(customs.bp)
+    app.register_blueprint(cosmosdb.bp)
     
     # Serve React app for non-API routes (production only)
     if has_static:

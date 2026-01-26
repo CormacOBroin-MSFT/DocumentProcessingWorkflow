@@ -67,20 +67,28 @@ STORAGE_NAME="${BASE_NAME//-/}storage"
 
 log_step "Checking for existing resources..."
 EXISTING_AI=$(az cognitiveservices account show --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP 2>/dev/null || echo "")
+EXISTING_COSMOS=$(az cosmosdb show --name "${BASE_NAME}-cosmos" --resource-group $RESOURCE_GROUP 2>/dev/null || echo "")
 
-if [ -n "$EXISTING_AI" ]; then
-    log_success "AI Services resource already exists, skipping Bicep deployment"
-    CU_ENDPOINT=$(az cognitiveservices account show --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP --query properties.endpoint -o tsv)
-    OPENAI_ENDPOINT=$CU_ENDPOINT
-    OPENAI_DEPLOYMENT=$(az cognitiveservices account deployment list --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP --query "[?contains(name, 'gpt-41')].name | [0]" -o tsv 2>/dev/null || echo "gpt-41")
-else
+# Decide if we need to run Bicep deployment
+NEED_BICEP_DEPLOY="false"
+if [ -z "$EXISTING_AI" ]; then
+    NEED_BICEP_DEPLOY="true"
+    log_step "AI Services not found, will deploy..."
+fi
+if [ -z "$EXISTING_COSMOS" ]; then
+    NEED_BICEP_DEPLOY="true"
+    log_step "Cosmos DB not found, will deploy..."
+fi
+
+if [ "$NEED_BICEP_DEPLOY" = "true" ]; then
     # Deploy infrastructure
     log_step "Deploying Bicep template (this may take 2-3 minutes)..."
     echo ""
     echo "   Template: infrastructure/local-dev.bicep"
-    echo "   Resources to create:"
+    echo "   Resources to create/update:"
     echo "     • Storage Account: ${STORAGE_NAME}"
     echo "     • AI Services: ${AI_SERVICES_NAME}"
+    echo "     • Cosmos DB: ${BASE_NAME}-cosmos"
     echo "     • Foundry Project: ${BASE_NAME}-project"
     echo "     • Model Deployments: gpt-41, gpt-41-mini, text-embedding-3-large"
     echo ""
@@ -118,6 +126,8 @@ else
     AI_SERVICES_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.aiServicesName.value')
     OPENAI_ENDPOINT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.openAIEndpoint.value')
     OPENAI_DEPLOYMENT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.openAIDeploymentName.value')
+    COSMOS_ENDPOINT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.cosmosDbEndpoint.value')
+    COSMOS_ACCOUNT_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.cosmosDbAccountName.value')
     
     # Create Foundry project via CLI (avoids ARM timing issues with managed identity)
     log_step "Creating Foundry project..."
@@ -130,6 +140,11 @@ else
           --output none 2>/dev/null || log_success "Project may already exist"
         log_success "Foundry project created"
     fi
+else
+    log_success "All resources already exist, skipping Bicep deployment"
+    CU_ENDPOINT=$(az cognitiveservices account show --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP --query properties.endpoint -o tsv)
+    OPENAI_ENDPOINT=$CU_ENDPOINT
+    OPENAI_DEPLOYMENT=$(az cognitiveservices account deployment list --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP --query "[?contains(name, 'gpt-41')].name | [0]" -o tsv 2>/dev/null || echo "gpt-41")
 fi
 
 echo ""
@@ -162,6 +177,26 @@ if [ -n "$USER_OBJECT_ID" ]; then
     --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$STORAGE_NAME" \
     --output none 2>/dev/null || log_warning "Role may already exist"
   
+  # Get Cosmos DB account name for existing deployments
+  if [ -z "$COSMOS_ACCOUNT_NAME" ]; then
+    COSMOS_ACCOUNT_NAME="${BASE_NAME}-cosmos"
+  fi
+  
+  # Get the full Cosmos DB account resource ID for account-level scope
+  COSMOS_ACCOUNT_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.DocumentDB/databaseAccounts/$COSMOS_ACCOUNT_NAME"
+  
+  # Cosmos DB requires SQL Role Assignment for data plane access (different from Azure RBAC)
+  # Built-in Data Contributor role ID: 00000000-0000-0000-0000-000000000002
+  # We need ACCOUNT-LEVEL scope (not database-level) for the SDK to read metadata
+  echo "   Assigning Cosmos DB SQL Role (Data Contributor) at account level..."
+  az cosmosdb sql role assignment create \
+    --account-name $COSMOS_ACCOUNT_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --role-definition-id "00000000-0000-0000-0000-000000000002" \
+    --principal-id $USER_OBJECT_ID \
+    --scope "$COSMOS_ACCOUNT_ID" \
+    --output none 2>/dev/null || log_warning "Role may already exist"
+  
   log_success "Role assignments complete"
 else
   log_warning "Could not get user ID for role assignments"
@@ -178,26 +213,36 @@ az storage account update \
 
 log_success "Storage account configured for secure access"
 
+# Get Cosmos DB endpoint
+log_step "Getting Cosmos DB endpoint..."
+COSMOS_ENDPOINT=$(az cosmosdb show --name "${BASE_NAME}-cosmos" --resource-group $RESOURCE_GROUP --query documentEndpoint -o tsv 2>/dev/null || echo "")
+
 # Create .env file
 ENV_FILE="$PROJECT_DIR/backend/.env"
 log_step "Creating $ENV_FILE..."
 
-cat > $ENV_FILE << EOF
-# Azure Storage
-AZURE_STORAGE_CONNECTION_STRING=$STORAGE_CONNECTION_STRING
-AZURE_STORAGE_CONTAINER=customs-documents
-
-# Azure Content Understanding (uses Azure CLI credentials)
-AZURE_CONTENT_UNDERSTANDING_ENDPOINT=$CU_ENDPOINT
-
-# Azure OpenAI (same AI Services endpoint)
-AZURE_OPENAI_ENDPOINT=$OPENAI_ENDPOINT
-AZURE_OPENAI_DEPLOYMENT=$OPENAI_DEPLOYMENT
-
-# Flask
-FLASK_ENV=development
-FLASK_DEBUG=true
-EOF
+# Write .env file line by line to avoid formatting issues with long values
+{
+  echo "# Azure Storage"
+  printf '%s\n' "AZURE_STORAGE_CONNECTION_STRING=${STORAGE_CONNECTION_STRING}"
+  echo "AZURE_STORAGE_CONTAINER=customs-documents"
+  echo ""
+  echo "# Azure Content Understanding (uses Azure CLI credentials)"
+  echo "AZURE_CONTENT_UNDERSTANDING_ENDPOINT=${CU_ENDPOINT}"
+  echo ""
+  echo "# Azure OpenAI (same AI Services endpoint)"
+  echo "AZURE_OPENAI_ENDPOINT=${OPENAI_ENDPOINT}"
+  echo "AZURE_OPENAI_DEPLOYMENT=${OPENAI_DEPLOYMENT}"
+  echo ""
+  echo "# Azure Cosmos DB (uses Azure CLI credentials)"
+  echo "AZURE_COSMOS_ENDPOINT=${COSMOS_ENDPOINT}"
+  echo "AZURE_COSMOS_DATABASE=customs-workflow"
+  echo "AZURE_COSMOS_CONTAINER=declarations"
+  echo ""
+  echo "# Flask"
+  echo "FLASK_ENV=development"
+  echo "FLASK_DEBUG=true"
+} > "$ENV_FILE"
 
 log_success "Environment file created"
 echo ""
@@ -208,6 +253,7 @@ echo "   Storage Account:     $STORAGE_NAME"
 echo "   AI Services:         $AI_SERVICES_NAME"
 echo "   OpenAI Deployment:   $OPENAI_DEPLOYMENT"
 echo "   CU Endpoint:         $CU_ENDPOINT"
+echo "   Cosmos DB Endpoint:  $COSMOS_ENDPOINT"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 log_warning "Note: Public network access on storage may be disabled daily by subscription policy."
