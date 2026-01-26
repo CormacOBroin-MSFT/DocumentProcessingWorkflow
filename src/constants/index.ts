@@ -16,7 +16,7 @@ export const DELAYS = {
     UPLOAD_TICK: 100,
     SCAN_ANIMATION: 1500,
     SUBMIT_ANIMATION: 2000,
-    FABRIC_STORE: 1500,
+    COSMOSDB_STORE: 1500,
 } as const
 
 // Compliance check configuration
@@ -77,7 +77,7 @@ export const WORKFLOW_STAGES = [
     { name: 'Compliance Check', label: 'Automated Validation' },
     { name: 'Approval Workflow', label: 'Human Review' },
     { name: 'Customs Submission', label: 'Authority Filing' },
-    { name: 'Fabric Storage', label: 'Analytics Store' },
+    { name: 'CosmosDB', label: 'Analytics Store' },
 ] as const
 
 // Return to automation reasons

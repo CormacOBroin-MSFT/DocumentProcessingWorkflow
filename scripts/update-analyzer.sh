@@ -1,6 +1,9 @@
 #!/bin/bash
 # Update Content Understanding analyzer with improved field descriptions
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 ANALYZER_ID="customsDeclaration"
 API_VERSION="2025-11-01"
 
@@ -46,7 +49,7 @@ CREATE_RESPONSE=$(curl -s -w "\n%{http_code}" \
     -X PUT "${ENDPOINT}/contentunderstanding/analyzers/${ANALYZER_ID}?api-version=${API_VERSION}" \
     -H "Authorization: Bearer ${ACCESS_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d @infrastructure/customs-analyzer.json)
+    -d @"$PROJECT_DIR/infrastructure/customs-analyzer.json")
 
 CREATE_STATUS=$(echo "$CREATE_RESPONSE" | tail -n 1)
 CREATE_BODY=$(echo "$CREATE_RESPONSE" | sed '$d')

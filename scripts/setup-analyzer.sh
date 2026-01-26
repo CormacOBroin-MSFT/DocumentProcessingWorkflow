@@ -2,6 +2,9 @@
 # Shared function to setup Content Understanding analyzer
 # Can be sourced by other scripts or run standalone
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 setup_analyzer() {
     local ENDPOINT="${1:-$AZURE_CONTENT_UNDERSTANDING_ENDPOINT}"
     local ANALYZER_ID="customsDeclaration"
@@ -59,7 +62,7 @@ setup_analyzer() {
         -X PUT "${ENDPOINT}/contentunderstanding/analyzers/${ANALYZER_ID}?api-version=${API_VERSION}" \
         -H "Authorization: Bearer ${ACCESS_TOKEN}" \
         -H "Content-Type: application/json" \
-        -d @infrastructure/customs-analyzer.json)
+        -d @"$PROJECT_DIR/infrastructure/customs-analyzer.json")
     
     HTTP_STATUS=$(echo "$RESPONSE" | tail -n 1)
     BODY=$(echo "$RESPONSE" | sed '$d')

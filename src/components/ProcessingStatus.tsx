@@ -5,7 +5,7 @@
 
 import type { FC } from 'react'
 import { Card } from '@/components/ui/card'
-import { CheckCircle, Clock, X, ScanSmiley } from '@phosphor-icons/react'
+import { CheckCircle, Clock, X, ScanSmiley, Warning } from '@phosphor-icons/react'
 import { DocumentPreview } from './DocumentPreview'
 import type { ProcessingStep } from '@/types/customs'
 
@@ -59,7 +59,9 @@ export const ProcessingStatus: FC<ProcessingStatusProps> = ({
                                         ? 'bg-processing text-white'
                                         : step.status === 'error'
                                             ? 'bg-destructive text-white'
-                                            : 'bg-muted text-muted-foreground'
+                                            : step.status === 'warning'
+                                                ? 'bg-amber-500 text-white'
+                                                : 'bg-muted text-muted-foreground'
                                     }`}
                             >
                                 {step.status === 'complete' ? (
@@ -68,22 +70,34 @@ export const ProcessingStatus: FC<ProcessingStatusProps> = ({
                                     <Clock size={18} className="animate-spin" />
                                 ) : step.status === 'error' ? (
                                     <X size={18} weight="bold" />
+                                ) : step.status === 'warning' ? (
+                                    <Warning size={18} weight="bold" />
                                 ) : (
                                     <span className="text-xs font-medium">{index + 1}</span>
                                 )}
                             </div>
-                            <span
-                                className={`text-sm ${step.status === 'complete'
-                                    ? 'text-success font-medium'
-                                    : step.status === 'in-progress'
-                                        ? 'text-processing font-medium'
-                                        : step.status === 'error'
-                                            ? 'text-destructive'
-                                            : 'text-muted-foreground'
-                                    }`}
-                            >
-                                {step.label}
-                            </span>
+                            <div className="flex flex-col">
+                                <span
+                                    className={`text-sm ${step.status === 'complete'
+                                        ? 'text-success font-medium'
+                                        : step.status === 'in-progress'
+                                            ? 'text-processing font-medium'
+                                            : step.status === 'error'
+                                                ? 'text-destructive'
+                                                : step.status === 'warning'
+                                                    ? 'text-amber-600 font-medium'
+                                                    : 'text-muted-foreground'
+                                        }`}
+                                >
+                                    {step.label}
+                                    {step.status === 'warning' && ' (partial)'}
+                                </span>
+                                {step.warningMessage && step.status === 'warning' && (
+                                    <span className="text-xs text-amber-600 mt-0.5">
+                                        {step.warningMessage}
+                                    </span>
+                                )}
+                            </div>
                         </div>
                     ))}
                 </div>

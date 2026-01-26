@@ -51,6 +51,9 @@ const OCRResponseSchema = z.object({
     structured_data: z.record(z.string(), z.any()).nullable().optional(),
     raw_data: z.record(z.string(), z.any()).nullable().optional(),
     ocr_confidence: z.number().optional(),
+    fields_extracted: z.number().optional(),
+    total_fields: z.number().optional(),
+    extraction_warning: z.string().optional(),
     status: z.string().optional(),
 }).passthrough()
 
@@ -131,6 +134,9 @@ export async function analyzeDocument(blobUrl: string): Promise<{
     rawData: Record<string, { value: string; confidence: number }>
     structuredData: StructuredDataWithConfidence | null
     ocrConfidence: number
+    fieldsExtracted: number
+    totalFields: number
+    extractionWarning?: string
 }> {
     const response = await fetch(`${API_CONFIG.BASE_URL}/api/ocr/analyze`, {
         method: 'POST',
@@ -165,6 +171,9 @@ export async function analyzeDocument(blobUrl: string): Promise<{
         rawData: (result.raw_data || {}) as Record<string, { value: string; confidence: number }>,
         structuredData: hasStructuredData ? result.structured_data as StructuredDataWithConfidence : null,
         ocrConfidence: result.ocr_confidence || 0,
+        fieldsExtracted: result.fields_extracted || 0,
+        totalFields: result.total_fields || 7,
+        extractionWarning: result.extraction_warning,
     }
 }
 

@@ -5,6 +5,8 @@
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_DIR"
 
 echo "🚀 AutonomousFlow Local Development"
 echo ""
@@ -15,7 +17,7 @@ while [[ "$#" -gt 0 ]]; do
     case $1 in
         --setup-azure|-a) SETUP_AZURE=true ;;
         --help|-h)
-            echo "Usage: ./local-dev.sh [options]"
+            echo "Usage: scripts/local-dev.sh [options]"
             echo ""
             echo "Options:"
             echo "  --setup-azure, -a   Run Azure setup first (creates resources + .env)"
@@ -32,31 +34,31 @@ done
 if [ "$SETUP_AZURE" = true ]; then
     echo "📦 Running Azure setup..."
     echo ""
-    ./setup-azure.sh
+    "$SCRIPT_DIR/setup-azure.sh"
     echo ""
-elif [ ! -f "backend/.env" ]; then
+elif [ ! -f "$PROJECT_DIR/backend/.env" ]; then
     echo "⚠️  No backend/.env found."
     echo ""
     echo "Options:"
-    echo "  1. Run ./setup-azure.sh to create Azure resources"
+    echo "  1. Run scripts/setup-azure.sh to create Azure resources"
     echo "  2. Copy backend/.env.example to backend/.env for mock mode"
-    echo "  3. Run ./local-dev.sh --setup-azure to do both"
+    echo "  3. Run scripts/local-dev.sh --setup-azure to do both"
     echo ""
     read -p "Run Azure setup now? (y/N) " -n 1 -r
     echo ""
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        ./setup-azure.sh
+        "$SCRIPT_DIR/setup-azure.sh"
         echo ""
     else
         echo "📝 Creating backend/.env from template (mock mode)..."
-        cp backend/.env.example backend/.env
+        cp "$PROJECT_DIR/backend/.env.example" "$PROJECT_DIR/backend/.env"
         echo ""
     fi
 fi
 
 # Setup backend
 echo "🐍 Setting up Python backend..."
-cd backend
+cd "$PROJECT_DIR/backend"
 
 if [ ! -d "venv" ]; then
     echo "   Creating virtual environment..."
@@ -69,7 +71,7 @@ pip install -r requirements.txt -q
 echo "   Starting Flask backend on http://localhost:5000..."
 python run.py &
 BACKEND_PID=$!
-cd ..
+cd "$PROJECT_DIR"
 
 # Give backend time to start
 sleep 2

@@ -6,6 +6,8 @@ RESOURCE_GROUP="autonomousflow-rg"
 LOCATION="swedencentral"
 BASE_NAME="autonomousflow"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_DIR"
 
 # Colors for output
 RED='\033[0;31m'
@@ -33,7 +35,7 @@ handle_error() {
 trap 'handle_error $LINENO' ERR
 
 # Source shared functions
-source "$SCRIPT_DIR/scripts/setup-analyzer.sh"
+source "$SCRIPT_DIR/setup-analyzer.sh"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -86,7 +88,7 @@ else
     # Run deployment
     if ! az deployment group create \
       --resource-group $RESOURCE_GROUP \
-      --template-file infrastructure/local-dev.bicep \
+      --template-file "$PROJECT_DIR/infrastructure/local-dev.bicep" \
       --parameters baseName=$BASE_NAME location=$LOCATION \
       --output none 2>&1 | tee /tmp/bicep-deploy.log; then
         log_error "Bicep deployment failed!"
@@ -177,7 +179,7 @@ az storage account update \
 log_success "Storage account configured for secure access"
 
 # Create .env file
-ENV_FILE="backend/.env"
+ENV_FILE="$PROJECT_DIR/backend/.env"
 log_step "Creating $ENV_FILE..."
 
 cat > $ENV_FILE << EOF
@@ -221,5 +223,5 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 log_success "Setup complete!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "Next: Run ./local-dev.sh to start the application"
+echo "Next: Run scripts/local-dev.sh to start the application"
 echo ""

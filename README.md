@@ -80,8 +80,8 @@ Without Azure credentials, the app runs in mock mode with sample data - you'll s
 az login
 
 # 2. Run deployment script
-chmod +x deploy.sh
-./deploy.sh
+chmod +x scripts/deploy.sh
+scripts/deploy.sh
 ```
 
 This creates all resources with proper Managed Identity configuration:
@@ -132,10 +132,16 @@ AutonomousFlow/
 │   └── run.py                   # Entry point
 ├── infrastructure/               # Azure IaC
 │   └── app-service.bicep        # Bicep template
+├── scripts/                      # Shell scripts
+│   ├── deploy.sh                # One-click deploy script
+│   ├── setup-azure.sh           # Azure resource setup
+│   ├── local-dev.sh             # Local development script
+│   ├── cleanup-azure.sh         # Cleanup Azure resources
+│   ├── setup-analyzer.sh        # Content Understanding analyzer setup
+│   └── update-analyzer.sh       # Update analyzer
 ├── .github/workflows/            # CI/CD
 │   └── deploy.yml               # GitHub Actions
 ├── Dockerfile                    # Container build
-├── deploy.sh                     # One-click deploy script
 └── README.md
 ```
 

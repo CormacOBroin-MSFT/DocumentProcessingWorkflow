@@ -6,9 +6,11 @@ RESOURCE_GROUP="autonomousflow-rg"
 LOCATION="swedencentral"
 BASE_NAME="autonomousflow"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PROJECT_DIR"
 
 # Source shared functions
-source "$SCRIPT_DIR/scripts/setup-analyzer.sh"
+source "$SCRIPT_DIR/setup-analyzer.sh"
 
 echo "🚀 Deploying AutonomousFlow to Azure..."
 echo ""
@@ -31,7 +33,7 @@ az group create --name $RESOURCE_GROUP --location $LOCATION --output none
 echo "🏗️  Deploying Azure resources (this may take 2-3 minutes)..."
 DEPLOYMENT_OUTPUT=$(az deployment group create \
   --resource-group $RESOURCE_GROUP \
-  --template-file infrastructure/app-service.bicep \
+  --template-file "$PROJECT_DIR/infrastructure/app-service.bicep" \
   --parameters baseName=$BASE_NAME location=$LOCATION \
   --query properties.outputs -o json)
 

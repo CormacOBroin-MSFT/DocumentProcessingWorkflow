@@ -18,7 +18,6 @@ import {
   ShieldCheck,
   UserCheck,
   PaperPlaneTilt,
-  ChartBar,
   CheckCircle,
   Clock,
   LockSimple,
@@ -127,7 +126,7 @@ function App() {
       { name: 'Compliance Check', icon: ShieldCheck, label: 'Automated Validation' },
       { name: 'Approval Workflow', icon: UserCheck, label: 'Human Review' },
       { name: 'Customs Submission', icon: PaperPlaneTilt, label: 'Authority Filing' },
-      { name: 'Fabric Storage', icon: ChartBar, label: 'Analytics Store' },
+      { name: 'CosmosDB', icon: Database, label: 'Analytics Store' },
     ],
     []
   )
@@ -230,7 +229,12 @@ function App() {
         setProcessingStatus('Extracting document content with AI...')
 
         const urlToAnalyze = blobUrl || fileUrl
-        const { rawData, structuredData, ocrConfidence } = await analyzeDocument(urlToAnalyze)
+        const { rawData, structuredData, ocrConfidence, fieldsExtracted, extractionWarning } = await analyzeDocument(urlToAnalyze)
+
+        // Show warning if extraction had issues
+        if (extractionWarning) {
+          toast.warning(extractionWarning, { duration: 8000 })
+        }
 
         const hasStructuredData =
           structuredData && Object.values(structuredData).some((field) => field?.value)
@@ -238,8 +242,10 @@ function App() {
           setRawDataWithConfidence(structuredData)
         }
 
+        // Mark OCR step with warning status if no fields were extracted
+        const ocrStatus = fieldsExtracted === 0 ? 'warning' as const : 'complete' as const
         setProcessingSteps((prev) =>
-          prev.map((s) => (s.id === 'ocr' ? { ...s, status: 'complete' } : s))
+          prev.map((s) => (s.id === 'ocr' ? { ...s, status: ocrStatus } : s))
         )
 
         // Step 3: Transform to structured data
@@ -449,7 +455,12 @@ function App() {
       }
 
       try {
-        const { rawData, structuredData, ocrConfidence } = await analyzeDocument(urlToAnalyze)
+        const { rawData, structuredData, ocrConfidence, fieldsExtracted, extractionWarning } = await analyzeDocument(urlToAnalyze)
+
+        // Show warning if extraction had issues
+        if (extractionWarning) {
+          toast.warning(extractionWarning, { duration: 8000 })
+        }
 
         setTimeout(() => {
           setShowScanLine(false)
@@ -481,6 +492,9 @@ function App() {
             if (extractedStructuredData) {
               setEditedData(extractedStructuredData)
               setShowStructuredData(true)
+            } else if (fieldsExtracted === 0) {
+              // No fields extracted - show empty form for manual entry
+              toast.info('No fields could be extracted. You can enter the data manually.')
             }
           }
 
@@ -731,12 +745,12 @@ function App() {
       advanceToStage(7)
 
       if (workflowMode === 'automated' && isAutomatedRunning) {
-        setTimeout(() => handleStoreInFabric(), 800)
+        setTimeout(() => handleStoreInCosmosDB(), 800)
       }
     }, 2000)
   }, [updateStageStatus, advanceToStage, workflowMode, isAutomatedRunning])
 
-  const handleStoreInFabric = useCallback(() => {
+  const handleStoreInCosmosDB = useCallback(() => {
     updateStageStatus(7, 'processing')
     setTimeout(() => {
       updateStageStatus(7, 'completed')
@@ -1242,11 +1256,11 @@ function App() {
                           </div>
                         )}
 
-                        {/* Stage 7: Fabric Storage */}
+                        {/* Stage 7: CosmosDB Storage */}
                         {index === 7 && status === 'active' && (
-                          <Button onClick={handleStoreInFabric} className="w-full">
-                            <ChartBar className="mr-2" size={16} />
-                            Store in Fabric
+                          <Button onClick={handleStoreInCosmosDB} className="w-full">
+                            <Database className="mr-2" size={16} />
+                            Store in CosmosDB
                           </Button>
                         )}
 

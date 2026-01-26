@@ -75,12 +75,13 @@ export type WorkflowMode = 'manual' | 'automated'
 export type AutomatedStep = 'idle' | 'upload' | 'processing' | 'approval' | 'complete'
 
 // Processing step status
-export type ProcessingStepStatus = 'pending' | 'in-progress' | 'complete' | 'error'
+export type ProcessingStepStatus = 'pending' | 'in-progress' | 'complete' | 'error' | 'warning'
 
 export type ProcessingStep = {
     id: string
     label: string
     status: ProcessingStepStatus
+    warningMessage?: string
 }
 
 // Helper to extract values from structured data with confidence

@@ -49,4 +49,4 @@ az cognitiveservices account purge \
 echo ""
 echo "✅ Cleanup complete!"
 echo ""
-echo "💡 Run ./setup-azure.sh to recreate resources."
+echo "💡 Run scripts/setup-azure.sh to recreate resources."
