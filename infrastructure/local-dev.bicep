@@ -1,5 +1,5 @@
 // Infrastructure for local development only
-// Creates: Storage Account, Microsoft Foundry (new) resource + project + GPT model deployment, Cosmos DB
+// Creates: Storage Account, Microsoft Foundry (new) resource + project + GPT model deployment, Azure AI Search
 // Does NOT create: App Service, Key Vault (not needed locally)
 
 @description('Base name for all resources')
@@ -124,57 +124,27 @@ resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2
   }
 }
 
-// Cosmos DB Account for storing processed customs declarations
-resource cosmosDbAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
-  name: '${baseName}-cosmos'
+// Azure AI Search Service for agent tools (HS codes, sanctions lookup)
+// This integrates natively with Foundry agents via AzureAISearchAgentTool
+resource searchService 'Microsoft.Search/searchServices@2024-06-01-preview' = {
+  name: '${baseName}-search'
   location: location
-  kind: 'GlobalDocumentDB'
-  properties: {
-    databaseAccountOfferType: 'Standard'
-    consistencyPolicy: {
-      defaultConsistencyLevel: 'Session'
-    }
-    locations: [
-      {
-        locationName: location
-        failoverPriority: 0
-        isZoneRedundant: false
-      }
-    ]
-    capabilities: [
-      {
-        name: 'EnableServerless'
-      }
-    ]
-    publicNetworkAccess: 'Enabled'
+  sku: {
+    name: 'basic'  // Basic tier supports semantic search
   }
-}
-
-// Cosmos DB Database
-resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-05-15' = {
-  parent: cosmosDbAccount
-  name: 'customs-workflow'
-  properties: {
-    resource: {
-      id: 'customs-workflow'
-    }
+  identity: {
+    type: 'SystemAssigned'
   }
-}
-
-// Cosmos DB Container for customs declarations
-resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
-  parent: cosmosDatabase
-  name: 'declarations'
   properties: {
-    resource: {
-      id: 'declarations'
-      partitionKey: {
-        paths: ['/documentId']
-        kind: 'Hash'
-      }
-      indexingPolicy: {
-        automatic: true
-        indexingMode: 'consistent'
+    hostingMode: 'default'
+    publicNetworkAccess: 'enabled'
+    partitionCount: 1
+    replicaCount: 1
+    semanticSearch: 'standard'  // Enable semantic search for better results
+    // Enable RBAC authentication (required for DefaultAzureCredential)
+    authOptions: {
+      aadOrApiKey: {
+        aadAuthFailureMode: 'http401WithBearerChallenge'
       }
     }
   }
@@ -187,5 +157,5 @@ output aiServicesName string = aiFoundry.name
 output aiProjectName string = aiProject.name
 output openAIEndpoint string = aiFoundry.properties.endpoint
 output openAIDeploymentName string = gpt41Deployment.name
-output cosmosDbEndpoint string = cosmosDbAccount.properties.documentEndpoint
-output cosmosDbAccountName string = cosmosDbAccount.name
+output searchServiceName string = searchService.name
+output searchServiceEndpoint string = 'https://${searchService.name}.search.windows.net'

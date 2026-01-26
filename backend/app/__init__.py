@@ -96,7 +96,7 @@ def create_app():
             }
         })
     
-    from app.routes import upload, storage, ocr, transform, compliance, customs, cosmosdb
+    from app.routes import upload, storage, ocr, transform, compliance, customs, cosmosdb, agents
     
     app.register_blueprint(upload.bp)
     app.register_blueprint(storage.bp)
@@ -105,6 +105,7 @@ def create_app():
     app.register_blueprint(compliance.bp)
     app.register_blueprint(customs.bp)
     app.register_blueprint(cosmosdb.bp)
+    app.register_blueprint(agents.bp)
     
     # Serve React app for non-API routes (production only)
     if has_static:

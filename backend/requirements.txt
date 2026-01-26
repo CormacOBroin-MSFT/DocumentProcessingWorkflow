@@ -6,6 +6,15 @@ azure-ai-formrecognizer==3.3.0
 azure-identity==1.19.0
 azure-cosmos==4.7.0
 openai>=1.50.0
-pydantic==2.6.0
+pydantic>=2.6.0
 gunicorn==21.2.0
 httpx>=0.27.0
+pyyaml>=6.0.0
+aiohttp>=3.9.0
+
+# Microsoft Agent Framework for Foundry Agent Service
+# NOTE: These are optional - only needed for Azure AI Foundry Agent features
+# Install separately with: pip install agent-framework-azure-ai azure-ai-projects --pre
+# Uncomment below if you need persistent Foundry agents:
+# agent-framework-azure-ai
+# azure-ai-projects

@@ -31,19 +31,39 @@ setup_analyzer() {
     
     # Set Content Understanding model defaults (maps model names to deployment names)
     # Content Understanding requires gpt-4.1, gpt-4.1-mini, and text-embedding-3-large
+    # Retry a few times in case deployments are still initializing
     echo "   Setting Content Understanding defaults..."
-    DEFAULTS_RESPONSE=$(curl -s -w "\n%{http_code}" \
-        -X PATCH "${ENDPOINT}/contentunderstanding/defaults?api-version=${API_VERSION}" \
-        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-        -H "Content-Type: application/merge-patch+json" \
-        -d '{"modelDeployments": {"gpt-4.1": "gpt-41", "gpt-4.1-mini": "gpt-41-mini", "text-embedding-3-large": "text-embedding-3-large"}}')
     
-    DEFAULTS_STATUS=$(echo "$DEFAULTS_RESPONSE" | tail -n 1)
-    if [ "$DEFAULTS_STATUS" != "200" ] && [ "$DEFAULTS_STATUS" != "201" ]; then
-        DEFAULTS_BODY=$(echo "$DEFAULTS_RESPONSE" | sed '$d')
-        echo "   ⚠️  Defaults response (HTTP $DEFAULTS_STATUS): $DEFAULTS_BODY"
-    else
-        echo "   ✅ Defaults configured"
+    MAX_RETRIES=5
+    RETRY_DELAY=10
+    DEFAULTS_SET=false
+    
+    for i in $(seq 1 $MAX_RETRIES); do
+        DEFAULTS_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X PATCH "${ENDPOINT}/contentunderstanding/defaults?api-version=${API_VERSION}" \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -H "Content-Type: application/merge-patch+json" \
+            -d '{"modelDeployments": {"gpt-4.1": "gpt-41", "gpt-4.1-mini": "gpt-41-mini", "text-embedding-3-large": "text-embedding-3-large"}}')
+        
+        DEFAULTS_STATUS=$(echo "$DEFAULTS_RESPONSE" | tail -n 1)
+        if [ "$DEFAULTS_STATUS" = "200" ] || [ "$DEFAULTS_STATUS" = "201" ]; then
+            echo "   ✅ Defaults configured"
+            DEFAULTS_SET=true
+            break
+        else
+            DEFAULTS_BODY=$(echo "$DEFAULTS_RESPONSE" | sed '$d')
+            if [ $i -lt $MAX_RETRIES ]; then
+                echo "   ⚠️  Defaults not ready (attempt $i/$MAX_RETRIES), waiting ${RETRY_DELAY}s..."
+                sleep $RETRY_DELAY
+            else
+                echo "   ❌ Failed to set defaults after $MAX_RETRIES attempts"
+                echo "   Response (HTTP $DEFAULTS_STATUS): $DEFAULTS_BODY"
+            fi
+        fi
+    done
+    
+    if [ "$DEFAULTS_SET" != "true" ]; then
+        echo "   ⚠️  Continuing without defaults - analyzer creation may fail"
     fi
     
     # Check if analyzer exists

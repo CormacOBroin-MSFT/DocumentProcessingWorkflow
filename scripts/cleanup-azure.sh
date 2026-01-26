@@ -23,7 +23,7 @@ fi
 echo "⚠️  This will DELETE all resources in '$RESOURCE_GROUP':"
 echo "   • Storage Account"
 echo "   • AI Services (Content Understanding)"
-echo "   • Cosmos DB Account (and all data)"
+echo "   • Azure AI Search (and indexed data)"
 echo ""
 read -p "Are you sure? (y/N) " -n 1 -r
 echo ""
@@ -35,10 +35,7 @@ fi
 
 echo ""
 echo "🗑️  Deleting resource group '$RESOURCE_GROUP'..."
-az group delete --name $RESOURCE_GROUP --yes --no-wait
-
-echo "⏳ Waiting for resource group deletion..."
-az group wait --name $RESOURCE_GROUP --deleted 2>/dev/null || true
+az group delete --name $RESOURCE_GROUP --yes
 
 # Purge AI Services to avoid soft-delete issues on next deploy
 echo "🧹 Purging AI Services (avoiding soft-delete)..."
