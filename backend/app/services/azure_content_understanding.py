@@ -172,6 +172,7 @@ class AzureContentUnderstandingService:
             # Build structured data from extracted fields
             structured_data: Dict[str, Dict[str, Any]] = {}
             confidences = []
+            extracted_field_count = 0
             
             for field_name in CUSTOMS_FIELDS:
                 field_data = fields.get(field_name, {})
@@ -192,8 +193,14 @@ class AzureContentUnderstandingService:
                     'confidence': confidence
                 }
                 
-                if value and confidence > 0:
-                    confidences.append(confidence)
+                if value and value.strip():
+                    extracted_field_count += 1
+                    if confidence > 0:
+                        confidences.append(confidence)
+            
+            # Check if any fields were extracted
+            if extracted_field_count == 0:
+                logger.warning("No fields were extracted from the document. The document may not be a valid customs declaration or may be unreadable.")
             
             # Calculate overall confidence
             overall_confidence = sum(confidences) / len(confidences) if confidences else 0.0
@@ -208,11 +215,21 @@ class AzureContentUnderstandingService:
                 if key and value:
                     raw_data[key] = {'value': value, 'confidence': conf}
             
-            return {
+            # Build extraction result with warning if no fields were extracted
+            result = {
                 'structured_data': structured_data,
                 'raw_data': raw_data,
-                'ocr_confidence': overall_confidence
+                'ocr_confidence': overall_confidence,
+                'fields_extracted': extracted_field_count,
+                'total_fields': len(CUSTOMS_FIELDS)
             }
+            
+            if extracted_field_count == 0:
+                result['extraction_warning'] = 'No customs declaration fields could be extracted from this document. Please ensure you are uploading a valid customs declaration or commercial invoice.'
+            elif extracted_field_count < len(CUSTOMS_FIELDS) // 2:
+                result['extraction_warning'] = f'Only {extracted_field_count} of {len(CUSTOMS_FIELDS)} fields were extracted. Some information may need to be entered manually.'
+            
+            return result
             
         except Exception as e:
             logger.error(f"Error extracting customs fields: {e}")

@@ -56,18 +56,30 @@ def analyze_document():
         
         structured_data = result.get('structured_data', {})
         raw_data = result.get('raw_data', {})
-        fields_found = len([f for f in structured_data.values() if f.get('value')])
+        fields_extracted = result.get('fields_extracted', 0)
+        total_fields = result.get('total_fields', 7)
+        extraction_warning = result.get('extraction_warning')
         
-        logger.info(f"✅ Extracted {fields_found}/7 fields (confidence: {result['ocr_confidence']:.0%})")
+        if fields_extracted == 0:
+            logger.warning(f"⚠️ No fields extracted from document")
+        else:
+            logger.info(f"✅ Extracted {fields_extracted}/{total_fields} fields (confidence: {result['ocr_confidence']:.0%})")
         logger.info("=" * 60)
         
-        return jsonify({
+        response_data = {
             'document_id': document_id,
             'structured_data': structured_data,
             'raw_data': raw_data,
             'ocr_confidence': result['ocr_confidence'],
+            'fields_extracted': fields_extracted,
+            'total_fields': total_fields,
             'status': 'analyzed'
-        }), 200
+        }
+        
+        if extraction_warning:
+            response_data['extraction_warning'] = extraction_warning
+        
+        return jsonify(response_data), 200
     
     except Exception as e:
         logger.error(f"OCR analysis failed: {e}")
