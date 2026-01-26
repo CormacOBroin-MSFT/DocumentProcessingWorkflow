@@ -1,0 +1,127 @@
+# Customs Compliance Workflow
+# Orchestrates multiple compliance agents in parallel to analyze customs declarations
+#
+# This workflow uses the Microsoft Agent Framework declarative workflow format.
+# Agents run concurrently where possible for efficiency.
+
+$schema: https://aka.ms/agent-framework/workflow/1.0.0
+version: 1.0.0
+name: customs-compliance-workflow
+description: |
+  Comprehensive customs compliance analysis workflow.
+  Runs multiple specialized agents to analyze different aspects of a customs declaration.
+  
+  Agents:
+  - Document Consistency: Cross-field validation
+  - HS Code Validation: Tariff code verification
+  - Country Restrictions: Sanctions screening
+  - Country of Origin: Origin plausibility
+  - Controlled Goods: Export control screening
+  - Value Reasonableness: Valuation checks
+  - Shipper Verification: Shipper info completeness
+
+inputs:
+  type: object
+  properties:
+    declaration:
+      type: object
+      description: The customs declaration to analyze
+      properties:
+        shipper:
+          type: string
+          description: Shipper name and address
+        receiver:
+          type: string
+          description: Receiver/consignee name and address
+        goods_description:
+          type: string
+          description: Description of the goods
+        hs_code:
+          type: string
+          description: Declared HS/tariff code
+        declared_value:
+          type: string
+          description: Declared customs value
+        country_of_origin:
+          type: string
+          description: Country of origin
+        destination_country:
+          type: string
+          description: Destination country
+        weight:
+          type: string
+          description: Total weight
+        quantity:
+          type: string
+          description: Quantity of items
+  required:
+    - declaration
+
+outputs:
+  type: object
+  properties:
+    compliance_report:
+      type: object
+      description: Aggregated compliance findings from all agents
+
+# Workflow execution graph
+executors:
+  # Phase 1: Document consistency check (runs first, can block others if critical errors)
+  - id: document_consistency
+    agent: document-consistency-agent
+    
+  # Phase 2: Parallel compliance checks (run concurrently)
+  - id: hs_code_validation
+    agent: hs-code-validation-agent
+    
+  - id: country_restrictions
+    agent: country-restrictions-agent
+    
+  - id: country_of_origin
+    agent: country-of-origin-agent
+    
+  - id: controlled_goods
+    agent: controlled-goods-agent
+    
+  - id: value_reasonableness
+    agent: value-reasonableness-agent
+    
+  - id: shipper_verification
+    agent: shipper-verification-agent
+
+  # Final aggregation
+  - id: aggregate_findings
+    type: function
+    function: aggregate_compliance_findings
+
+# Workflow edges define execution order
+edges:
+  # Document consistency runs first
+  - from: START
+    to: document_consistency
+    
+  # After document consistency, all other agents run in parallel
+  - from: document_consistency
+    to: 
+      - hs_code_validation
+      - country_restrictions
+      - country_of_origin
+      - controlled_goods
+      - value_reasonableness
+      - shipper_verification
+    type: fan_out
+    
+  # All agents converge to aggregation
+  - from:
+      - hs_code_validation
+      - country_restrictions
+      - country_of_origin
+      - controlled_goods
+      - value_reasonableness
+      - shipper_verification
+    to: aggregate_findings
+    type: fan_in
+    
+  # Aggregation produces final output
+  - from: aggregate_findings
+    to: END

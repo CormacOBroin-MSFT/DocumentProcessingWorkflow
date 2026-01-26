@@ -1,5 +1,5 @@
 // Infrastructure for local development only
-// Creates: Storage Account, Microsoft Foundry (new) resource + project + GPT model deployment, Cosmos DB
+// Creates: Storage Account, Microsoft Foundry (new) resource + project + GPT model deployment, Cosmos DB, Azure AI Search
 // Does NOT create: App Service, Key Vault (not needed locally)
 
 @description('Base name for all resources')
@@ -124,6 +124,26 @@ resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2
   }
 }
 
+// Azure AI Search Service for agent tools (HS codes, sanctions lookup)
+// This integrates natively with Foundry agents via AzureAISearchAgentTool
+resource searchService 'Microsoft.Search/searchServices@2024-06-01-preview' = {
+  name: '${baseName}-search'
+  location: location
+  sku: {
+    name: 'basic'  // Basic tier supports semantic search
+  }
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    hostingMode: 'default'
+    publicNetworkAccess: 'enabled'
+    partitionCount: 1
+    replicaCount: 1
+    semanticSearch: 'standard'  // Enable semantic search for better results
+  }
+}
+
 // Cosmos DB Account for storing processed customs declarations
 resource cosmosDbAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
   name: '${baseName}-cosmos'
@@ -180,6 +200,64 @@ resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
   }
 }
 
+// Cosmos DB Container for HS codes reference data
+resource cosmosHsCodesContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: cosmosDatabase
+  name: 'hs-codes'
+  properties: {
+    resource: {
+      id: 'hs-codes'
+      partitionKey: {
+        paths: ['/chapterCode']  // First 2 digits of HS code for efficient querying
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        automatic: true
+        indexingMode: 'consistent'
+        includedPaths: [
+          {
+            path: '/*'
+          }
+        ]
+        excludedPaths: [
+          {
+            path: '/"_etag"/?'
+          }
+        ]
+      }
+    }
+  }
+}
+
+// Cosmos DB Container for UK Sanctions List
+resource cosmosSanctionsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: cosmosDatabase
+  name: 'sanctions'
+  properties: {
+    resource: {
+      id: 'sanctions'
+      partitionKey: {
+        paths: ['/regimeCode']  // Sanctions regime for efficient querying
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        automatic: true
+        indexingMode: 'consistent'
+        includedPaths: [
+          {
+            path: '/*'
+          }
+        ]
+        excludedPaths: [
+          {
+            path: '/"_etag"/?'
+          }
+        ]
+      }
+    }
+  }
+}
+
 // Outputs
 output storageAccountName string = storageAccount.name
 output contentUnderstandingEndpoint string = aiFoundry.properties.endpoint
@@ -189,3 +267,5 @@ output openAIEndpoint string = aiFoundry.properties.endpoint
 output openAIDeploymentName string = gpt41Deployment.name
 output cosmosDbEndpoint string = cosmosDbAccount.properties.documentEndpoint
 output cosmosDbAccountName string = cosmosDbAccount.name
+output searchServiceName string = searchService.name
+output searchServiceEndpoint string = 'https://${searchService.name}.search.windows.net'

@@ -1,0 +1,9 @@
+{
+  "DocumentConsistencyAgent": "DocumentConsistencyAgent:1",
+  "HSCodeValidationAgent": "HSCodeValidationAgent:2",
+  "CountryRestrictionsAgent": "CountryRestrictionsAgent:2",
+  "CountryOfOriginAgent": "CountryOfOriginAgent:1",
+  "ControlledGoodsAgent": "ControlledGoodsAgent:1",
+  "ValueReasonablenessAgent": "ValueReasonablenessAgent:1",
+  "ShipperVerificationAgent": "ShipperVerificationAgent:2"
+}
