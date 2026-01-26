@@ -1,5 +1,5 @@
 // Infrastructure for local development only
-// Creates: Storage Account, Microsoft Foundry (new) resource + project + GPT model deployment
+// Creates: Storage Account, Microsoft Foundry (new) resource + project + GPT model deployment, Cosmos DB
 // Does NOT create: App Service, Key Vault (not needed locally)
 
 @description('Base name for all resources')
@@ -33,8 +33,9 @@ resource container 'Microsoft.Storage/storageAccounts/blobServices/containers@20
   name: 'customs-documents'
 }
 
-// Microsoft Foundry (new) resource
-resource aiFoundry 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = {
+// Microsoft Foundry (new) resource - uses AIServices kind with allowProjectManagement
+// This creates a Foundry resource compatible with the new Foundry portal (ai.azure.com with toggle on)
+resource aiFoundry 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   name: '${baseName}-foundry'
   location: location
   sku: {
@@ -46,17 +47,30 @@ resource aiFoundry 'Microsoft.CognitiveServices/accounts@2025-04-01-preview' = {
   }
   properties: {
     publicNetworkAccess: 'Enabled'
+    // Required for new Foundry - defines the developer API endpoint subdomain
     customSubDomainName: '${baseName}-foundry'
+    // Enable local auth for development (can be disabled in production)
     disableLocalAuth: false
+    // CRITICAL: This enables the new Foundry project management capabilities
     allowProjectManagement: true
   }
 }
 
-// Note: Foundry project is created via CLI in setup-azure.sh after account is ready
-// This avoids ARM timing issues with managed identity propagation
+// Microsoft Foundry Project - child resource of the Foundry account
+// Projects group in/outputs for a use case, including files, agents, evaluations, etc.
+// This creates a project visible in the new Foundry portal
+resource aiProject 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = {
+  name: '${baseName}-project'
+  parent: aiFoundry
+  location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {}
+}
 
-// GPT-4.1 Model Deployment (required for Content Understanding)
-resource gpt41Deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
+// GPT-4.1 Model Deployment (required for Content Understanding and LLM tasks)
+resource gpt41Deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   parent: aiFoundry
   name: 'gpt-41'
   sku: {
@@ -73,8 +87,8 @@ resource gpt41Deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-
   }
 }
 
-// GPT-4.1-mini Model Deployment (required for Content Understanding)
-resource gpt41MiniDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
+// GPT-4.1-mini Model Deployment (faster, lower cost option)
+resource gpt41MiniDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   parent: aiFoundry
   name: 'gpt-41-mini'
   dependsOn: [gpt41Deployment]
@@ -93,7 +107,7 @@ resource gpt41MiniDeployment 'Microsoft.CognitiveServices/accounts/deployments@2
 }
 
 // Text Embedding Model Deployment (required for Content Understanding)
-resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
+resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   parent: aiFoundry
   name: 'text-embedding-3-large'
   dependsOn: [gpt41MiniDeployment]
@@ -170,6 +184,7 @@ resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/con
 output storageAccountName string = storageAccount.name
 output contentUnderstandingEndpoint string = aiFoundry.properties.endpoint
 output aiServicesName string = aiFoundry.name
+output aiProjectName string = aiProject.name
 output openAIEndpoint string = aiFoundry.properties.endpoint
 output openAIDeploymentName string = gpt41Deployment.name
 output cosmosDbEndpoint string = cosmosDbAccount.properties.documentEndpoint

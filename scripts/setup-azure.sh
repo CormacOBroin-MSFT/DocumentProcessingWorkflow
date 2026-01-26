@@ -124,22 +124,13 @@ if [ "$NEED_BICEP_DEPLOY" = "true" ]; then
     STORAGE_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.storageAccountName.value')
     CU_ENDPOINT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.contentUnderstandingEndpoint.value')
     AI_SERVICES_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.aiServicesName.value')
+    AI_PROJECT_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.aiProjectName.value')
     OPENAI_ENDPOINT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.openAIEndpoint.value')
     OPENAI_DEPLOYMENT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.openAIDeploymentName.value')
     COSMOS_ENDPOINT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.cosmosDbEndpoint.value')
     COSMOS_ACCOUNT_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.cosmosDbAccountName.value')
     
-    # Create Foundry project via CLI (avoids ARM timing issues with managed identity)
-    log_step "Creating Foundry project..."
-    if az cognitiveservices account show --name "${BASE_NAME}-foundry/projects/${BASE_NAME}-project" --resource-group $RESOURCE_GROUP &>/dev/null; then
-        log_success "Foundry project already exists"
-    else
-        az rest --method PUT \
-          --url "https://management.azure.com/subscriptions/$(az account show --query id -o tsv)/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.CognitiveServices/accounts/${AI_SERVICES_NAME}/projects/${BASE_NAME}-project?api-version=2025-06-01" \
-          --body '{"location":"'$LOCATION'","properties":{}}' \
-          --output none 2>/dev/null || log_success "Project may already exist"
-        log_success "Foundry project created"
-    fi
+    log_success "Microsoft Foundry (new) project created: $AI_PROJECT_NAME"
 else
     log_success "All resources already exist, skipping Bicep deployment"
     CU_ENDPOINT=$(az cognitiveservices account show --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP --query properties.endpoint -o tsv)
@@ -247,14 +238,18 @@ log_step "Creating $ENV_FILE..."
 log_success "Environment file created"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📊 Deployed Resources"
+echo "📊 Deployed Resources (Microsoft Foundry - New)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "   Storage Account:     $STORAGE_NAME"
-echo "   AI Services:         $AI_SERVICES_NAME"
+echo "   Foundry Resource:    $AI_SERVICES_NAME"
+echo "   Foundry Project:     ${AI_PROJECT_NAME:-${BASE_NAME}-project}"
 echo "   OpenAI Deployment:   $OPENAI_DEPLOYMENT"
 echo "   CU Endpoint:         $CU_ENDPOINT"
 echo "   Cosmos DB Endpoint:  $COSMOS_ENDPOINT"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "🌐 View in Microsoft Foundry (new) portal:"
+echo "   https://ai.azure.com (toggle 'Try the new Foundry' ON)"
 echo ""
 log_warning "Note: Public network access on storage may be disabled daily by subscription policy."
 log_warning "If uploads fail, re-run this script to restore network access."
