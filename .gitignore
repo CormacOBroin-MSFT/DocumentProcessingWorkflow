@@ -61,6 +61,13 @@ htmlcov/
 local.settings.json
 .azure/
 
+# Agent YAML files (generated from templates with environment-specific connection IDs)
+# Keep templates in agents/templates/, ignore generated files
+agents/hs-code-validation-agent.yaml
+agents/country-restrictions-agent.yaml
+agents/shipper-verification-agent.yaml
+agents/.foundry_agent_ids.json
+
 # Azure Storage
 *.blob
 *.queue

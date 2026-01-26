@@ -56,6 +56,9 @@ from azure.ai.projects.models import (
     AzureAISearchToolResource,
     AISearchIndexResource,
     AzureAISearchQueryType,
+    BingGroundingAgentTool,
+    BingGroundingSearchToolParameters,
+    BingGroundingSearchConfiguration,
 )
 from azure.identity.aio import AzureCliCredential
 from dotenv import load_dotenv
@@ -84,53 +87,11 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', 'backend', '.env'))
 
 # Configuration
 AZURE_AI_PROJECT_ENDPOINT = os.getenv("AZURE_AI_PROJECT_ENDPOINT")
-AZURE_AI_MODEL_DEPLOYMENT_NAME = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-4o")
-AZURE_SEARCH_CONNECTION_NAME = os.getenv("AZURE_SEARCH_CONNECTION_NAME", "autonomousflow-search")
+AZURE_AI_MODEL_DEPLOYMENT_NAME = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-41")
+AZURE_AI_MODEL_MINI_DEPLOYMENT_NAME = os.getenv("AZURE_AI_MODEL_MINI_DEPLOYMENT_NAME", "gpt-41-mini")
 
 # File to store created agent IDs for reuse
 AGENT_IDS_FILE = os.path.join(os.path.dirname(__file__), ".foundry_agent_ids.json")
-
-
-# =============================================================================
-# Azure AI Search Tool Definitions for Foundry Agents
-# =============================================================================
-
-def create_hs_codes_search_tool() -> AzureAISearchAgentTool:
-    """
-    Create the Azure AI Search tool for HS codes lookup.
-    This tool appears natively in the Foundry portal.
-    """
-    return AzureAISearchAgentTool(
-        azure_ai_search=AzureAISearchToolResource(
-            indexes=[
-                AISearchIndexResource(
-                    project_connection_id=AZURE_SEARCH_CONNECTION_NAME,
-                    index_name="hs-codes",
-                    query_type=AzureAISearchQueryType.SEMANTIC,
-                    top_k=10,
-                )
-            ]
-        )
-    )
-
-
-def create_sanctions_search_tool() -> AzureAISearchAgentTool:
-    """
-    Create the Azure AI Search tool for sanctions lookup.
-    This tool appears natively in the Foundry portal.
-    """
-    return AzureAISearchAgentTool(
-        azure_ai_search=AzureAISearchToolResource(
-            indexes=[
-                AISearchIndexResource(
-                    project_connection_id=AZURE_SEARCH_CONNECTION_NAME,
-                    index_name="sanctions",
-                    query_type=AzureAISearchQueryType.SEMANTIC,
-                    top_k=10,
-                )
-            ]
-        )
-    )
 
 
 # =============================================================================
@@ -195,63 +156,139 @@ class ComplianceReport:
 # Agent Configuration
 # =============================================================================
 
-def load_agent_instructions(yaml_file: str) -> str:
-    """Load agent instructions from a YAML file."""
+def load_agent_yaml(yaml_file: str) -> dict:
+    """Load full agent configuration from a YAML file."""
     import yaml
     agent_dir = os.path.dirname(__file__)
     filepath = os.path.join(agent_dir, yaml_file)
     if os.path.exists(filepath):
         with open(filepath, 'r') as f:
-            data = yaml.safe_load(f)
-            return data.get('instructions', '')
-    return ""
+            return yaml.safe_load(f) or {}
+    return {}
 
 
-# Agent configurations with Azure AI Search tools for Foundry
-AGENT_CONFIGS = {
-    "DocumentConsistencyAgent": {
-        "yaml": "document-consistency-agent.yaml",
-        "foundry_tools": [],  # No external tools - uses LLM reasoning only
-        "local_tools": [],
-        "model": "gpt-4o-mini",
-    },
-    "HSCodeValidationAgent": {
-        "yaml": "hs-code-validation-agent.yaml",
-        "foundry_tools": [create_hs_codes_search_tool],  # Azure AI Search HS codes index
-        "local_tools": [lookup_hs_code, search_hs_codes_by_description, validate_hs_code_format, find_similar_hs_codes],
-        "model": "gpt-4o",
-    },
-    "CountryRestrictionsAgent": {
-        "yaml": "country-restrictions-agent.yaml",
-        "foundry_tools": [create_sanctions_search_tool],  # Azure AI Search sanctions index
-        "local_tools": [search_sanctions_by_name, search_sanctions_by_country, check_entity_sanctions, get_sanctions_regimes],
-        "model": "gpt-4o",
-    },
-    "CountryOfOriginAgent": {
-        "yaml": "country-of-origin-agent.yaml",
-        "foundry_tools": [],  # Uses LLM knowledge for country rules
-        "local_tools": [],
-        "model": "gpt-4o",
-    },
-    "ControlledGoodsAgent": {
-        "yaml": "controlled-goods-agent.yaml",
-        "foundry_tools": [],  # Uses LLM knowledge for controlled goods lists
-        "local_tools": [],
-        "model": "gpt-4o",
-    },
-    "ValueReasonablenessAgent": {
-        "yaml": "value-reasonableness-agent.yaml",
-        "foundry_tools": [],  # Uses LLM reasoning for value analysis
-        "local_tools": [],
-        "model": "gpt-4o-mini",
-    },
-    "ShipperVerificationAgent": {
-        "yaml": "shipper-verification-agent.yaml",
-        "foundry_tools": [create_sanctions_search_tool],  # Azure AI Search sanctions for shipper checks
-        "local_tools": [search_sanctions_by_name, search_sanctions_by_country, check_entity_sanctions, get_sanctions_regimes],
-        "model": "gpt-4o-mini",
-    },
-}
+def load_agent_instructions(yaml_file: str) -> str:
+    """Load agent instructions from a YAML file."""
+    data = load_agent_yaml(yaml_file)
+    return data.get('instructions', '')
+
+
+def load_agent_tools(yaml_file: str) -> list:
+    """Load agent tools configuration from a YAML file.
+    
+    Returns a list of tool definitions that can be passed to the Foundry API.
+    The YAML should contain tools in the Azure AI Foundry format with connection IDs.
+    """
+    data = load_agent_yaml(yaml_file)
+    tools = data.get('tools', [])
+    
+    if not tools:
+        return []
+    
+    # Convert YAML tool definitions to SDK tool objects
+    sdk_tools = []
+    for tool_def in tools:
+        tool_type = tool_def.get('type')
+        
+        if tool_type == 'azure_ai_search':
+            ai_search_config = tool_def.get('azure_ai_search', {})
+            indexes = ai_search_config.get('indexes', [])
+            
+            index_resources = []
+            for idx in indexes:
+                # Map query_type string to enum
+                query_type_str = idx.get('query_type', 'simple')
+                query_type_map = {
+                    'simple': AzureAISearchQueryType.SIMPLE,
+                    'semantic': AzureAISearchQueryType.SEMANTIC,
+                    'vector': AzureAISearchQueryType.VECTOR,
+                    'hybrid': AzureAISearchQueryType.VECTOR_SIMPLE_HYBRID,
+                    'hybrid_semantic': AzureAISearchQueryType.VECTOR_SEMANTIC_HYBRID,
+                }
+                query_type = query_type_map.get(query_type_str, AzureAISearchQueryType.SIMPLE)
+                
+                index_resources.append(AISearchIndexResource(
+                    project_connection_id=idx.get('project_connection_id'),
+                    index_name=idx.get('index_name'),
+                    query_type=query_type,
+                    top_k=idx.get('top_k', 5),
+                ))
+            
+            if index_resources:
+                sdk_tools.append(AzureAISearchAgentTool(
+                    azure_ai_search=AzureAISearchToolResource(indexes=index_resources)
+                ))
+        
+        elif tool_type == 'bing_grounding':
+            bing_config = tool_def.get('bing_grounding', {})
+            search_configs = bing_config.get('search_configurations', [])
+            
+            if search_configs:
+                config_objs = []
+                for cfg in search_configs:
+                    config_objs.append(BingGroundingSearchConfiguration(
+                        project_connection_id=cfg.get('project_connection_id'),
+                        market=cfg.get('market'),
+                        set_lang=cfg.get('set_lang'),
+                        count=cfg.get('count'),
+                    ))
+                
+                sdk_tools.append(BingGroundingAgentTool(
+                    bing_grounding=BingGroundingSearchToolParameters(
+                        search_configurations=config_objs
+                    )
+                ))
+    
+    return sdk_tools
+
+
+def get_agent_configs():
+    """Get agent configurations.
+    
+    Tools are now loaded from YAML files (generated by setup-azure.sh with connection IDs).
+    The 'local_tools' are only used for local workflow execution without Foundry.
+    """
+    return {
+        "DocumentConsistencyAgent": {
+            "yaml": "document-consistency-agent.yaml",
+            "local_tools": [],
+            "model": AZURE_AI_MODEL_MINI_DEPLOYMENT_NAME,
+        },
+        "HSCodeValidationAgent": {
+            "yaml": "hs-code-validation-agent.yaml",
+            "local_tools": [lookup_hs_code, search_hs_codes_by_description, validate_hs_code_format, find_similar_hs_codes],
+            "model": AZURE_AI_MODEL_DEPLOYMENT_NAME,
+        },
+        "CountryRestrictionsAgent": {
+            "yaml": "country-restrictions-agent.yaml",
+            "local_tools": [search_sanctions_by_name, search_sanctions_by_country, check_entity_sanctions, get_sanctions_regimes],
+            "model": AZURE_AI_MODEL_DEPLOYMENT_NAME,
+        },
+        "CountryOfOriginAgent": {
+            "yaml": "country-of-origin-agent.yaml",
+            "local_tools": [],
+            "model": AZURE_AI_MODEL_DEPLOYMENT_NAME,
+        },
+        "ControlledGoodsAgent": {
+            "yaml": "controlled-goods-agent.yaml",
+            "local_tools": [],
+            "model": AZURE_AI_MODEL_DEPLOYMENT_NAME,
+        },
+        "ValueReasonablenessAgent": {
+            "yaml": "value-reasonableness-agent.yaml",
+            "local_tools": [],
+            "model": AZURE_AI_MODEL_MINI_DEPLOYMENT_NAME,
+        },
+        "ShipperVerificationAgent": {
+            "yaml": "shipper-verification-agent.yaml",
+            "local_tools": [search_sanctions_by_name, search_sanctions_by_country, check_entity_sanctions, get_sanctions_regimes],
+            "model": AZURE_AI_MODEL_DEPLOYMENT_NAME,
+        },
+    }
+
+
+# Keep AGENT_CONFIGS for backward compatibility (evaluated at import time)
+AGENT_CONFIGS = None  # Will be set in functions that need it
 
 
 # =============================================================================
@@ -283,30 +320,55 @@ async def create_foundry_agents(delete_existing: bool = False) -> dict[str, str]
     agent_ids = {}
     
     # Load existing agent IDs if available
+    existing_ids = {}
     if os.path.exists(AGENT_IDS_FILE) and not delete_existing:
         with open(AGENT_IDS_FILE, 'r') as f:
             existing_ids = json.load(f)
             print(f"Found {len(existing_ids)} existing agent IDs")
-            return existing_ids
+    
+    # Get agent configs with current env vars
+    agent_configs = get_agent_configs()
     
     async with (
         AzureCliCredential() as credential,
         AIProjectClient(endpoint=AZURE_AI_PROJECT_ENDPOINT, credential=credential) as project_client,
     ):
+        # Verify existing agents still exist in Foundry
+        if existing_ids and not delete_existing:
+            all_exist = True
+            for name in agent_configs.keys():
+                if name not in existing_ids:
+                    print(f"  Agent {name} not in cached IDs, will create")
+                    all_exist = False
+                    break
+                try:
+                    agent_name = existing_ids[name].split(":")[0] if ":" in existing_ids[name] else name
+                    await project_client.agents.get(agent_name)
+                except Exception:
+                    print(f"  Agent {name} not found in Foundry, will recreate")
+                    all_exist = False
+                    break
+            
+            if all_exist:
+                print("All agents exist in Foundry, skipping creation")
+                return existing_ids
+            else:
+                existing_ids = {}  # Clear stale cache
+        
         # Delete existing agents if requested
         if delete_existing and os.path.exists(AGENT_IDS_FILE):
             await cleanup_foundry_agents()
         
         # Create each agent
-        for name, config in AGENT_CONFIGS.items():
+        for name, config in agent_configs.items():
             print(f"Creating agent: {name}...")
             
-            instructions = load_agent_instructions(config["yaml"])
+            yaml_file = config["yaml"]
+            instructions = load_agent_instructions(yaml_file)
             if not instructions:
                 instructions = f"You are the {name} compliance agent."
             
             model = config.get("model", AZURE_AI_MODEL_DEPLOYMENT_NAME)
-            foundry_tool_factories = config.get("foundry_tools", [])
             
             # Create the persistent agent in Foundry using Azure AI Projects 2.x API
             # Uses create_version() with PromptAgentDefinition including tools
@@ -315,16 +377,22 @@ async def create_foundry_agents(delete_existing: bool = False) -> dict[str, str]
                 instructions=instructions,
             )
             
-            # Add Azure AI Search tools if configured (factories that create tool instances)
-            if foundry_tool_factories:
-                tools = [factory() for factory in foundry_tool_factories]
+            # Load tools from YAML file (generated by setup-azure.sh with connection IDs)
+            tools = load_agent_tools(yaml_file)
+            if tools:
                 agent_definition["tools"] = tools
                 tool_names = []
                 for tool in tools:
                     if hasattr(tool, 'azure_ai_search') and tool.azure_ai_search:
                         for idx in tool.azure_ai_search.indexes:
-                            tool_names.append(idx.name or idx.index_name)
-                print(f"    Adding Azure AI Search tools: {tool_names}")
+                            tool_names.append(f"AI Search: {idx.index_name}")
+                            print(f"    Tool: Azure AI Search index '{idx.index_name}'")
+                    if hasattr(tool, 'bing_grounding') and tool.bing_grounding:
+                        tool_names.append("Bing Web Search")
+                        print(f"    Tool: Bing Grounding web search")
+                print(f"    Total tools: {len(tools)}")
+            else:
+                print(f"    No tools configured (using LLM reasoning only)")
             
             created_agent = await project_client.agents.create_version(
                 agent_name=name,
@@ -691,8 +759,9 @@ async def run_compliance_check(
         aggregator = ComplianceResultAggregator(id="aggregator")
         
         # Create executor for each Foundry agent
+        agent_configs = get_agent_configs()
         agent_executors = []
-        for name, config in AGENT_CONFIGS.items():
+        for name, config in agent_configs.items():
             if name not in agent_ids:
                 print(f"Warning: No agent ID for {name}, skipping")
                 continue

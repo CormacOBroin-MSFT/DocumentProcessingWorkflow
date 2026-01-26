@@ -79,14 +79,14 @@ tools:
   - type: azure_ai_search
     azure_ai_search:
       indexes:
-        - project_connection_id: /subscriptions/a69f4fd4-161a-4653-a0fd-561025636136/resourceGroups/autonomousflow-rg/providers/Microsoft.CognitiveServices/accounts/autonomousflow-foundry/projects/autonomousflow-project/connections/autonomousflow-search
+        - project_connection_id: {{SEARCH_CONNECTION_ID}}
           index_name: sanctions
           query_type: simple
           top_k: 5
   - type: bing_grounding
     bing_grounding:
       search_configurations:
-        - project_connection_id: /subscriptions/a69f4fd4-161a-4653-a0fd-561025636136/resourceGroups/autonomousflow-rg/providers/Microsoft.CognitiveServices/accounts/autonomousflow-foundry/projects/autonomousflow-project/connections/autonomousflowbingseau5rct2
+        - project_connection_id: {{BING_CONNECTION_ID}}
           market: en-us
           set_lang: en
           count: 5
