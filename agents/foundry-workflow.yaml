@@ -1,0 +1,207 @@
+kind: workflow
+name: customs-compliance-workflow
+id: customs-compliance-workflow-v1
+description: Sequential customs compliance analysis workflow. Runs 7 specialized agents to analyze customs declarations for compliance issues, then aggregates all findings.
+
+# OUTPUT SCHEMA:
+# The workflow returns a ComplianceReport JSON object:
+# {
+#   "declaration_id": "string",
+#   "timestamp": "ISO 8601 string",
+#   "overall_risk": "critical|high|medium|low|clear",
+#   "requires_manual_review": boolean,
+#   "summary": "string",
+#   "findings": [
+#     {
+#       "code": "string",
+#       "title": "string",
+#       "description": "string",
+#       "severity": "critical|high|medium|low|info",
+#       "confidence": "high|medium|low",
+#       "source_agent": "string",
+#       "evidence": ["string"]
+#     }
+#   ],
+#   "counts": {
+#     "critical": number,
+#     "high": number,
+#     "medium": number,
+#     "low": number,
+#     "info": number,
+#     "total": number
+#   },
+#   "recommendations": ["string"],
+#   "agents_reporting": {
+#     "DocumentConsistencyAgent": "completed|error|no_findings",
+#     "HSCodeValidationAgent": "completed|error|no_findings",
+#     "CountryRestrictionsAgent": "completed|error|no_findings",
+#     "CountryOfOriginAgent": "completed|error|no_findings",
+#     "ControlledGoodsAgent": "completed|error|no_findings",
+#     "ValueReasonablenessAgent": "completed|error|no_findings",
+#     "ShipperVerificationAgent": "completed|error|no_findings"
+#   },
+#   "processing_notes": "string"
+# }
+
+# AGENT OUTPUT SCHEMA (each specialist agent returns):
+# {
+#   "agent_name": "string",
+#   "findings": [
+#     {
+#       "code": "string",
+#       "title": "string", 
+#       "description": "string",
+#       "severity": "critical|high|medium|low|info",
+#       "confidence": "high|medium|low",
+#       "evidence": ["string"]
+#     }
+#   ],
+#   "status": "completed|error|no_findings"
+# }
+
+trigger:
+  kind: OnConversationStart
+  id: compliance_trigger
+  actions:
+    # Store the original input so all agents receive the same message
+    - kind: SetVariable
+      id: store-original-input
+      variable: Local.OriginalInput
+      value: =System.LastMessage
+
+    # Agent 1: Document Consistency Check
+    - kind: InvokeAzureAgent
+      id: invoke-document-consistency
+      agent:
+        name: DocumentConsistencyAgent
+      conversationId: =System.ConversationId
+      input:
+        messages: =Local.OriginalInput
+      output:
+        messages: Local.DocConsistencyResult
+        autoSend: false
+
+    # Agent 2: HS Code Validation
+    - kind: InvokeAzureAgent
+      id: invoke-hs-code-validation
+      agent:
+        name: HSCodeValidationAgent
+      conversationId: =System.ConversationId
+      input:
+        messages: =Local.OriginalInput
+      output:
+        messages: Local.HSCodeResult
+        autoSend: false
+
+    # Agent 3: Country Restrictions (Sanctions)
+    - kind: InvokeAzureAgent
+      id: invoke-country-restrictions
+      agent:
+        name: CountryRestrictionsAgent
+      conversationId: =System.ConversationId
+      input:
+        messages: =Local.OriginalInput
+      output:
+        messages: Local.SanctionsResult
+        autoSend: false
+
+    # Agent 4: Country of Origin
+    - kind: InvokeAzureAgent
+      id: invoke-country-of-origin
+      agent:
+        name: CountryOfOriginAgent
+      conversationId: =System.ConversationId
+      input:
+        messages: =Local.OriginalInput
+      output:
+        messages: Local.OriginResult
+        autoSend: false
+
+    # Agent 5: Controlled Goods
+    - kind: InvokeAzureAgent
+      id: invoke-controlled-goods
+      agent:
+        name: ControlledGoodsAgent
+      conversationId: =System.ConversationId
+      input:
+        messages: =Local.OriginalInput
+      output:
+        messages: Local.ControlledResult
+        autoSend: false
+
+    # Agent 6: Value Reasonableness
+    - kind: InvokeAzureAgent
+      id: invoke-value-reasonableness
+      agent:
+        name: ValueReasonablenessAgent
+      conversationId: =System.ConversationId
+      input:
+        messages: =Local.OriginalInput
+      output:
+        messages: Local.ValueResult
+        autoSend: false
+
+    # Agent 7: Shipper Verification
+    - kind: InvokeAzureAgent
+      id: invoke-shipper-verification
+      agent:
+        name: ShipperVerificationAgent
+      conversationId: =System.ConversationId
+      input:
+        messages: =Local.OriginalInput
+      output:
+        messages: Local.ShipperResult
+        autoSend: false
+
+    # Build the handoff packet with all agent outputs for the aggregator
+    - kind: SetVariable
+      id: build-handoff-packet
+      variable: Local.HandoffPacket
+      value: |
+        CUSTOMS COMPLIANCE ANALYSIS - AGGREGATION REQUEST
+        
+        Original Declaration:
+        ${Local.OriginalInput}
+        
+        === AGENT FINDINGS ===
+        
+        1. DOCUMENT CONSISTENCY AGENT:
+        ${Local.DocConsistencyResult}
+        
+        2. HS CODE VALIDATION AGENT:
+        ${Local.HSCodeResult}
+        
+        3. COUNTRY RESTRICTIONS AGENT:
+        ${Local.SanctionsResult}
+        
+        4. COUNTRY OF ORIGIN AGENT:
+        ${Local.OriginResult}
+        
+        5. CONTROLLED GOODS AGENT:
+        ${Local.ControlledResult}
+        
+        6. VALUE REASONABLENESS AGENT:
+        ${Local.ValueResult}
+        
+        7. SHIPPER VERIFICATION AGENT:
+        ${Local.ShipperResult}
+        
+        === END AGENT FINDINGS ===
+        
+        Please aggregate all findings above into a single ComplianceReport JSON.
+
+    # Agent 8: Aggregator - Combines all findings into final report
+    - kind: InvokeAzureAgent
+      id: invoke-aggregator
+      agent:
+        name: ComplianceAggregatorAgent
+      conversationId: =System.ConversationId
+      input:
+        messages: =Local.HandoffPacket
+      output:
+        messages: Local.AggregatedReport
+        autoSend: true
+
+    # End the conversation/workflow
+    - kind: EndConversation
+      id: end-conversation

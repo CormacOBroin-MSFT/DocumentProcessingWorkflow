@@ -5,5 +5,6 @@
   "CountryOfOriginAgent": "CountryOfOriginAgent:1",
   "ControlledGoodsAgent": "ControlledGoodsAgent:1",
   "ValueReasonablenessAgent": "ValueReasonablenessAgent:1",
-  "ShipperVerificationAgent": "ShipperVerificationAgent:1"
+  "ShipperVerificationAgent": "ShipperVerificationAgent:1",
+  "ComplianceAggregatorAgent": "ComplianceAggregatorAgent:1"
 }

@@ -5,22 +5,41 @@ This module implements the customs compliance workflow using Microsoft Agent Fra
 with PERSISTENT agents created in Azure AI Foundry. These agents are visible in
 the Azure AI Foundry portal and can be managed, monitored, and reused.
 
+WORKFLOW ARCHITECTURE:
+The workflow uses a fan-out/fan-in pattern for concurrent agent execution:
+
+    ┌─────────────┐
+    │  Dispatcher │  (receives declaration data)
+    └──────┬──────┘
+           │ fan-out (parallel execution)
+    ┌──────┼──────┬──────┬──────┬──────┬──────┬──────┐
+    ▼      ▼      ▼      ▼      ▼      ▼      ▼      ▼
+  ┌───┐  ┌───┐  ┌───┐  ┌───┐  ┌───┐  ┌───┐  ┌───┐
+  │Doc│  │HS │  │Cty│  │Org│  │Ctl│  │Val│  │Shp│
+  │Con│  │Cod│  │Rst│  │Cty│  │Gds│  │Rsn│  │Ver│
+  └───┘  └───┘  └───┘  └───┘  └───┘  └───┘  └───┘
+    │      │      │      │      │      │      │
+    └──────┴──────┴──────┴──────┴──────┴──────┘
+           │ fan-in (aggregation)
+    ┌──────┴──────┐
+    │  Aggregator │  (combines findings → ComplianceReport)
+    └─────────────┘
+
+TRACING & VISUALIZATION:
+- Uses OpenTelemetry for distributed tracing
+- Traces are visible in VS Code AI Toolkit's trace viewer
+- Each agent execution is a separate span within the workflow
+
 Best Practices Reference:
 - https://learn.microsoft.com/en-us/agent-framework/user-guide/agents/agent-types/azure-ai-foundry-agent
 - https://learn.microsoft.com/en-us/agent-framework/tutorials/workflows/simple-concurrent-workflow
-
-KEY DIFFERENCE FROM EPHEMERAL AGENTS:
-- Uses AIProjectClient to create agents that PERSIST in Azure AI Foundry
-- Agents are visible in the Foundry portal under your project
-- Agents can be reused across multiple workflow runs
-- Supports agent_id lookup to use existing agents
 
 Usage:
     # Create agents in Foundry and run workflow
     python workflow.py --create
     
-    # Run workflow using existing agents
-    python workflow.py --agent-ids agent1-id,agent2-id,...
+    # Run workflow with tracing enabled (viewable in AI Toolkit)
+    python workflow.py --run --trace
     
     # Delete agents from Foundry
     python workflow.py --cleanup
@@ -42,13 +61,16 @@ from typing import Any, Optional
 from agent_framework import (
     AgentResponseUpdate,
     ChatAgent,
+    ConcurrentBuilder,
     Executor,
     WorkflowBuilder,
     WorkflowContext,
     WorkflowOutputEvent,
+    ExecutorInvokedEvent,
+    ExecutorCompletedEvent,
     handler,
 )
-from agent_framework.azure import AzureAIAgentClient
+from agent_framework.azure import AzureAIClient, AzureAIProjectAgentProvider
 from azure.ai.projects.aio import AIProjectClient
 from azure.ai.projects.models import (
     PromptAgentDefinition,
@@ -92,6 +114,37 @@ AZURE_AI_MODEL_MINI_DEPLOYMENT_NAME = os.getenv("AZURE_AI_MODEL_MINI_DEPLOYMENT_
 
 # File to store created agent IDs for reuse
 AGENT_IDS_FILE = os.path.join(os.path.dirname(__file__), ".foundry_agent_ids.json")
+
+# File to store workflow ID for reuse
+WORKFLOW_IDS_FILE = os.path.join(os.path.dirname(__file__), ".foundry_workflow_ids.json")
+
+
+# =============================================================================
+# OpenTelemetry Tracing Setup
+# =============================================================================
+
+def setup_tracing(enable: bool = True) -> None:
+    """Configure OpenTelemetry tracing for workflow visualization.
+    
+    When enabled, traces are exported to the AI Toolkit trace viewer in VS Code.
+    This allows you to see the fan-out/fan-in pattern visually with timing info.
+    """
+    if not enable:
+        return
+    
+    try:
+        from agent_framework.observability import configure_otel_providers
+        
+        configure_otel_providers(
+            vs_code_extension_port=4317,  # AI Toolkit gRPC port
+            enable_sensitive_data=True,   # Capture prompts and completions
+        )
+        print("✓ OpenTelemetry tracing enabled (AI Toolkit port 4317)")
+        print("  View traces in VS Code: AI Toolkit → Tracing")
+    except ImportError:
+        print("⚠ OpenTelemetry not available. Install with: pip install opentelemetry-exporter-otlp-proto-grpc")
+    except Exception as e:
+        print(f"⚠ Could not enable tracing: {e}")
 
 
 # =============================================================================
@@ -284,6 +337,11 @@ def get_agent_configs():
             "local_tools": [search_sanctions_by_name, search_sanctions_by_country, check_entity_sanctions, get_sanctions_regimes],
             "model": AZURE_AI_MODEL_DEPLOYMENT_NAME,
         },
+        "ComplianceAggregatorAgent": {
+            "yaml": "compliance-aggregator-agent.yaml",
+            "local_tools": [],
+            "model": AZURE_AI_MODEL_DEPLOYMENT_NAME,
+        },
     }
 
 
@@ -465,7 +523,8 @@ async def list_foundry_agents() -> list[dict]:
         async for agent in project_client.agents.list():
             agents.append({
                 "name": agent.name,
-                "description": agent.description,
+                "id": getattr(agent, 'id', 'N/A'),
+                "model": getattr(agent, 'model', 'N/A'),
             })
         return agents
 
@@ -571,21 +630,21 @@ class FoundryAgentExecutor(Executor):
     """
     Executor that wraps an Azure AI Foundry persistent agent.
     
-    This executor uses an existing agent by ID from Azure AI Foundry.
+    This executor uses an existing agent by name from Azure AI Foundry.
     """
     
     def __init__(
         self,
         agent_name: str,
         agent_id: str,
-        project_client: AIProjectClient,
+        provider: AzureAIProjectAgentProvider,
         tools: list | None = None,
         id: str | None = None,
     ):
         super().__init__(id=id or agent_name.lower().replace("agent", "").replace(" ", "_"))
         self.agent_name = agent_name
         self.agent_id = agent_id
-        self.project_client = project_client
+        self.provider = provider
         self.tools = tools or []
         self._agent = None
     
@@ -595,26 +654,21 @@ class FoundryAgentExecutor(Executor):
         start = time.time()
         
         try:
-            # Create ChatAgent using the existing Foundry agent
-            async with ChatAgent(
-                chat_client=AzureAIAgentClient(
-                    project_client=self.project_client,
-                    agent_id=self.agent_id,
-                ),
-                tools=self.tools if self.tools else None,
-            ) as agent:
-                # Format and run
-                prompt = self._format_declaration(declaration)
-                result = await agent.run(prompt)
-                
-                # Parse findings
-                findings = self._parse_findings(result.text if hasattr(result, 'text') else str(result))
-                
-                agent_result = AgentResult(
-                    agent_name=self.agent_name,
-                    findings=findings,
-                    processing_time_ms=int((time.time() - start) * 1000),
-                )
+            # Get the agent from Foundry by name using the provider
+            agent = await self.provider.get_agent(name=self.agent_name)
+            
+            # Format and run
+            prompt = self._format_declaration(declaration)
+            result = await agent.run(prompt)
+            
+            # Parse findings
+            findings = self._parse_findings(result.text if hasattr(result, 'text') else str(result))
+            
+            agent_result = AgentResult(
+                agent_name=self.agent_name,
+                findings=findings,
+                processing_time_ms=int((time.time() - start) * 1000),
+            )
         except Exception as e:
             agent_result = AgentResult(
                 agent_name=self.agent_name,
@@ -754,6 +808,9 @@ async def run_compliance_check(
         AzureCliCredential() as credential,
         AIProjectClient(endpoint=AZURE_AI_PROJECT_ENDPOINT, credential=credential) as project_client,
     ):
+        # Create provider for getting agents
+        provider = AzureAIProjectAgentProvider(project_client=project_client)
+        
         # Create executors
         dispatcher = DeclarationDispatcher(id="dispatcher")
         aggregator = ComplianceResultAggregator(id="aggregator")
@@ -769,7 +826,7 @@ async def run_compliance_check(
             executor = FoundryAgentExecutor(
                 agent_name=name,
                 agent_id=agent_ids[name],
-                project_client=project_client,
+                provider=provider,
                 tools=config.get("tools", []),
             )
             agent_executors.append(executor)
@@ -783,11 +840,20 @@ async def run_compliance_check(
             .build()
         )
         
-        # Run workflow
+        # Run workflow with progress tracking
         report: ComplianceReport | None = None
+        completed_agents = set()
+        total_agents = len(agent_executors)
+        
+        print(f"Running {total_agents} agents concurrently...")
         async for event in workflow.run_stream(declaration_data):
-            if isinstance(event, AgentResponseUpdate):
-                print(f"[{event.executor_id}] Processing...", end="\r", flush=True)
+            if isinstance(event, ExecutorInvokedEvent):
+                if event.executor_id not in ["dispatcher", "aggregator"]:
+                    print(f"  ⏳ {event.executor_id} started...")
+            elif isinstance(event, ExecutorCompletedEvent):
+                if event.executor_id not in ["dispatcher", "aggregator"]:
+                    completed_agents.add(event.executor_id)
+                    print(f"  ✓ {event.executor_id} completed ({len(completed_agents)}/{total_agents})")
             elif isinstance(event, WorkflowOutputEvent):
                 report = event.data
         
@@ -797,6 +863,71 @@ async def run_compliance_check(
         return report
 
 
+async def run_declarative_workflow(declaration: dict[str, Any], trace: bool = False) -> dict[str, Any]:
+    """
+    Run the compliance workflow using the declarative YAML format.
+    
+    This approach uses the agent_framework.declarative module to load and
+    execute a YAML-defined workflow that references Foundry agents.
+    """
+    from pathlib import Path
+    try:
+        from agent_framework.declarative import WorkflowFactory
+    except ImportError:
+        print("Installing agent-framework-declarative...")
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "agent-framework-declarative", "--pre"])
+        from agent_framework.declarative import WorkflowFactory
+    
+    # Setup tracing if enabled
+    if trace:
+        setup_tracing(enable=True)
+    
+    # Load the declarative workflow
+    workflow_path = Path(__file__).parent / "foundry-workflow.yaml"
+    
+    async with (
+        AzureCliCredential() as credential,
+    ):
+        # Create provider for Foundry agents  
+        provider = AzureAIProjectAgentProvider(
+            endpoint=AZURE_AI_PROJECT_ENDPOINT,
+            credential=credential,
+            model=AZURE_AI_MODEL_DEPLOYMENT_NAME,
+        )
+        
+        # Load agent IDs if available
+        agent_ids = {}
+        if os.path.exists(AGENT_IDS_FILE):
+            with open(AGENT_IDS_FILE) as f:
+                agent_ids = json.load(f)
+        
+        # Create agents dict for the workflow factory
+        # These will be fetched from Foundry when invoked
+        agents = {}
+        for name in agent_ids.keys():
+            try:
+                agent = await provider.get_agent(name=name)
+                agents[name] = agent
+            except Exception as e:
+                print(f"  ⚠ Could not load agent {name}: {e}")
+        
+        # Create workflow factory with pre-loaded agents
+        factory = WorkflowFactory(agents=agents)
+        
+        # Load and run workflow
+        workflow = factory.create_workflow_from_yaml_path(workflow_path)
+        
+        print(f"✓ Loaded declarative workflow: {workflow.name}")
+        print(f"  Agents registered: {list(agents.keys())}")
+        print()
+        
+        # Run the workflow
+        result = await workflow.run({"declaration": declaration})
+        
+        return result.get_outputs()
+
+
 async def main():
     """CLI entry point"""
     parser = argparse.ArgumentParser(description="Customs Compliance Workflow with Azure AI Foundry Agents")
@@ -804,9 +935,15 @@ async def main():
     parser.add_argument("--cleanup", action="store_true", help="Delete agents from Azure AI Foundry")
     parser.add_argument("--list", action="store_true", help="List agents in Azure AI Foundry")
     parser.add_argument("--run", action="store_true", help="Run compliance check with sample data")
+    parser.add_argument("--declarative", action="store_true", help="Run using declarative YAML workflow")
     parser.add_argument("--recreate", action="store_true", help="Delete existing agents and create new ones")
+    parser.add_argument("--trace", action="store_true", help="Enable OpenTelemetry tracing for visualization")
     
     args = parser.parse_args()
+    
+    # Enable tracing if requested
+    if args.trace:
+        setup_tracing(enable=True)
     
     if args.cleanup:
         await cleanup_foundry_agents()
@@ -821,49 +958,91 @@ async def main():
     
     if args.create or args.recreate:
         await create_foundry_agents(delete_existing=args.recreate)
-        if not args.run:
+        if not args.run and not args.declarative:
             return
     
-    if args.run or (not args.create and not args.cleanup and not args.list):
+    # Sample declaration for testing
+    declaration = {
+        "declaration_id": "DEMO-001",
+        "shipper": {
+            "name": "Shenzhen Electronics Co., Ltd.",
+            "address": "123 Factory Road, Shenzhen",
+            "country": "CN"
+        },
+        "consignee": {
+            "name": "UK Import Ltd.",
+            "address": "45 Commerce Street, London",
+            "country": "GB"
+        },
+        "goods": [
+            {
+                "description": "LED Computer Monitors, 27 inch, 4K resolution",
+                "hs_code": "852852",
+                "quantity": 50,
+                "unit_value": 300.00,
+                "total_value": 15000.00,
+                "currency": "USD",
+                "country_of_origin": "CN"
+            }
+        ],
+        "country_of_dispatch": "CN",
+        "destination_country": "GB",
+        "port_of_entry": "Felixstowe",
+        "total_value": 15000.00,
+        "currency": "USD",
+        "transport_mode": "Sea",
+    }
+    
+    if args.declarative:
+        # Run using declarative YAML workflow
+        print("=" * 70)
+        print("Customs Compliance Workflow (DECLARATIVE MODE)")
+        print("=" * 70)
+        print()
+        print("Using YAML-defined workflow from: foundry-workflow.yaml")
+        print("This workflow uses InvokeAzureAgent actions to call Foundry agents.")
+        print()
+        
+        print("Analyzing declaration...")
+        print(json.dumps(declaration, indent=2))
+        print()
+        
+        result = await run_declarative_workflow(declaration, trace=args.trace)
+        
+        print()
+        print("=" * 70)
+        print("WORKFLOW OUTPUT")
+        print("=" * 70)
+        print(json.dumps(result, indent=2, default=str))
+        return
+    
+    if args.run or (not args.create and not args.cleanup and not args.list and not args.declarative):
         print("=" * 70)
         print("Customs Compliance Workflow (Azure AI Foundry Agents)")
         print("=" * 70)
         print()
-        print("NOTE: This workflow uses PERSISTENT agents in Azure AI Foundry.")
-        print("      Agents are visible in the Foundry portal and can be managed there.")
+        print("WORKFLOW ARCHITECTURE:")
+        print("  This workflow uses a fan-out/fan-in pattern for concurrent execution:")
         print()
-        
-        # Sample declaration
-        declaration = {
-            "declaration_id": "DEMO-001",
-            "shipper": {
-                "name": "Shenzhen Electronics Co., Ltd.",
-                "address": "123 Factory Road, Shenzhen",
-                "country": "CN"
-            },
-            "consignee": {
-                "name": "UK Import Ltd.",
-                "address": "45 Commerce Street, London",
-                "country": "GB"
-            },
-            "goods": [
-                {
-                    "description": "LED Computer Monitors, 27 inch, 4K resolution",
-                    "hs_code": "852852",
-                    "quantity": 50,
-                    "unit_value": 300.00,
-                    "total_value": 15000.00,
-                    "currency": "USD",
-                    "country_of_origin": "CN"
-                }
-            ],
-            "country_of_dispatch": "CN",
-            "destination_country": "GB",
-            "port_of_entry": "Felixstowe",
-            "total_value": 15000.00,
-            "currency": "USD",
-            "transport_mode": "Sea",
-        }
+        print("      ┌─────────────┐")
+        print("      │  Dispatcher │")
+        print("      └──────┬──────┘")
+        print("             │ fan-out")
+        print("  ┌──────────┼──────────┬──────────┬──────────┐")
+        print("  ▼          ▼          ▼          ▼          ▼")
+        print(" Doc       HS Code    Country    Shipper    Value")
+        print(" Consist   Validate   Restrict   Verify     Check")
+        print("  │          │          │          │          │")
+        print("  └──────────┴──────────┴──────────┴──────────┘")
+        print("             │ fan-in")
+        print("      ┌──────┴──────┐")
+        print("      │  Aggregator │ → ComplianceReport")
+        print("      └─────────────┘")
+        print()
+        print("AGENTS: Created in Azure AI Foundry (visible in portal)")
+        if args.trace:
+            print("TRACING: Enabled - view in VS Code AI Toolkit → Tracing")
+        print()
         
         print("Analyzing declaration...")
         print(json.dumps(declaration, indent=2))
