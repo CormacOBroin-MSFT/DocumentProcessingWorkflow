@@ -99,6 +99,9 @@ function App() {
   // Compliance state
   const [complianceChecks, setComplianceChecks] = useState<boolean[]>([])
   const [complianceDescriptions, setComplianceDescriptions] = useState<string[]>([])
+  const [complianceRiskLevel, setComplianceRiskLevel] = useState<string>('MEDIUM')
+  const [complianceRequiresReview, setComplianceRequiresReview] = useState<boolean>(false)
+  const [complianceRecommendations, setComplianceRecommendations] = useState<string[]>([])
 
   // Approval state
   const [showApproval, setShowApproval] = useState(false)
@@ -127,7 +130,7 @@ function App() {
       { name: 'Compliance Check', icon: ShieldCheck, label: 'Automated Validation' },
       { name: 'Approval Workflow', icon: UserCheck, label: 'Human Review' },
       { name: 'Customs Submission', icon: PaperPlaneTilt, label: 'Authority Filing' },
-      { name: 'CosmosDB', icon: Database, label: 'Analytics Store' },
+      { name: 'CosmosDB', icon: Database, label: 'NoSQL Database' },
     ],
     []
   )
@@ -163,6 +166,9 @@ function App() {
     setShowStructuredData(false)
     setComplianceChecks([])
     setComplianceDescriptions([])
+    setComplianceRiskLevel('MEDIUM')
+    setComplianceRequiresReview(false)
+    setComplianceRecommendations([])
     setShowApproval(false)
     setShowSubmitAnimation(false)
     setIsAutomatedRunning(false)
@@ -296,9 +302,15 @@ function App() {
           checks,
           complianceConfidence,
           issueDescriptions,
+          riskLevel,
+          requiresManualReview,
+          recommendations,
         } = await performComplianceCheck(finalStructuredData)
         setComplianceChecks(checks)
         setComplianceDescriptions(issueDescriptions)
+        setComplianceRiskLevel(riskLevel)
+        setComplianceRequiresReview(requiresManualReview)
+        setComplianceRecommendations(recommendations)
 
         setDocument((prev) =>
           prev
@@ -591,11 +603,24 @@ function App() {
     updateStageStatus(4, 'processing')
     setComplianceChecks([])
     setComplianceDescriptions([])
+    setComplianceRiskLevel('MEDIUM')
+    setComplianceRequiresReview(false)
+    setComplianceRecommendations([])
 
     try {
-      const { checks, complianceConfidence, issueDescriptions } = await performComplianceCheck(
-        document.structuredData
-      )
+      const { 
+        checks, 
+        complianceConfidence, 
+        issueDescriptions,
+        riskLevel,
+        requiresManualReview,
+        recommendations,
+      } = await performComplianceCheck(document.structuredData)
+
+      // Set the new compliance metadata immediately
+      setComplianceRiskLevel(riskLevel)
+      setComplianceRequiresReview(requiresManualReview)
+      setComplianceRecommendations(recommendations)
 
       checks.forEach((_, index) => {
         setTimeout(() => {
@@ -1017,6 +1042,9 @@ function App() {
                       rawDataWithConfidence={rawDataWithConfidence}
                       complianceChecks={complianceChecks}
                       complianceDescriptions={complianceDescriptions}
+                      riskLevel={complianceRiskLevel}
+                      requiresManualReview={complianceRequiresReview}
+                      recommendations={complianceRecommendations}
                       extractionConfidence={document?.confidenceScores?.ocr || 0}
                       complianceConfidence={document?.confidenceScores?.compliance || 0}
                       onApprove={handleApprovalComplete}
@@ -1285,6 +1313,9 @@ function App() {
                             rawDataWithConfidence={rawDataWithConfidence}
                             complianceChecks={complianceChecks}
                             complianceDescriptions={complianceDescriptions}
+                            riskLevel={complianceRiskLevel}
+                            requiresManualReview={complianceRequiresReview}
+                            recommendations={complianceRecommendations}
                             extractionConfidence={document?.confidenceScores?.ocr || 0}
                             complianceConfidence={document?.confidenceScores?.compliance || 0}
                             onApprove={handleApprovalComplete}

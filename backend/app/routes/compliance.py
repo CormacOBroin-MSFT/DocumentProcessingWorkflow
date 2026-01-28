@@ -63,22 +63,37 @@ def validate_compliance():
         
         # Map workflow output to expected response format
         checks = _map_findings_to_checks(report)
+        confidence = _calculate_confidence(report, checks)
+        
+        # Flag for manual review if confidence < 85%
+        requires_manual_review = confidence < 0.85 or report.get('requires_manual_review', False)
+        
+        # Add guidance for manual review cases
+        recommendations = report.get('recommendations', [])
+        if requires_manual_review and confidence < 0.85:
+            recommendations = [
+                f"⚠️ Compliance confidence ({confidence*100:.0f}%) is below 85% threshold - manual review required.",
+                *recommendations
+            ]
         
         logger.info(f"✅ Workflow complete: {report.get('overall_risk', 'UNKNOWN').upper()} risk")
         logger.info(f"   Findings: {report.get('counts', {}).get('total', 0)}")
+        logger.info(f"   Checks passed: {sum(checks)}/5")
+        logger.info(f"   Confidence: {confidence*100:.0f}%")
+        logger.info(f"   Manual review: {'YES' if requires_manual_review else 'NO'}")
         logger.info("=" * 60)
-        
+
         return jsonify({
             'document_id': document_id,
             'checks': checks,
-            'compliance_confidence': _calculate_confidence(report),
+            'compliance_confidence': confidence,
             'issues': _extract_issues(report),
             'issue_descriptions': _extract_issue_descriptions(report),
             'reasoning': report.get('summary', 'Compliance analysis completed'),
             'risk_level': report.get('overall_risk', 'medium').upper(),
-            'requires_manual_review': report.get('requires_manual_review', False),
+            'requires_manual_review': requires_manual_review,
             'findings': report.get('findings', []),
-            'recommendations': report.get('recommendations', []),
+            'recommendations': recommendations,
             'agents_reporting': report.get('agents_reporting', {}),
             'status': 'validated'
         }), 200
@@ -128,20 +143,35 @@ def _map_findings_to_checks(report: dict) -> list:
     return checks
 
 
-def _calculate_confidence(report: dict) -> float:
-    """Calculate overall confidence from workflow report"""
-    overall_risk = report.get('overall_risk', 'medium')
+def _calculate_confidence(report: dict, checks: list = None) -> float:
+    """Calculate overall confidence from workflow report.
     
-    # Map risk to confidence
-    risk_confidence = {
-        'clear': 0.95,
-        'low': 0.85,
-        'medium': 0.70,
-        'high': 0.50,
-        'critical': 0.30,
-    }
+    If all checks pass, give high confidence regardless of risk level.
+    Otherwise, base confidence on the severity of findings.
+    """
+    # If checks provided and all pass, return high confidence
+    if checks and all(checks):
+        return 0.95
     
-    return risk_confidence.get(overall_risk, 0.70)
+    # Count findings by severity
+    findings = report.get('findings', [])
+    counts = report.get('counts', {})
+    
+    critical = counts.get('critical', 0)
+    high = counts.get('high', 0)
+    medium = counts.get('medium', 0)
+    low = counts.get('low', 0)
+    
+    # Calculate confidence based on finding severity
+    # Start at 100% and deduct based on severity
+    confidence = 1.0
+    confidence -= critical * 0.20  # Each critical finding deducts 20%
+    confidence -= high * 0.10      # Each high finding deducts 10%
+    confidence -= medium * 0.05   # Each medium finding deducts 5%
+    confidence -= low * 0.02      # Each low finding deducts 2%
+    
+    # Ensure confidence is in valid range
+    return max(0.30, min(0.98, confidence))
 
 
 def _extract_issues(report: dict) -> list:

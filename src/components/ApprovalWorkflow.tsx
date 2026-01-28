@@ -17,6 +17,9 @@ import {
     ArrowCounterClockwise,
     FloppyDisk,
     Sparkle,
+    CaretDown,
+    CaretUp,
+    Lightbulb,
 } from '@phosphor-icons/react'
 import type {
     CustomsDeclaration,
@@ -31,6 +34,9 @@ export type ApprovalWorkflowProps = {
     rawDataWithConfidence?: StructuredDataWithConfidence | null
     complianceChecks: boolean[]
     complianceDescriptions: string[]
+    riskLevel?: string
+    requiresManualReview?: boolean
+    recommendations?: string[]
     extractionConfidence: number
     complianceConfidence: number
     onApprove: (data: CustomsDeclaration, reviewerNotes: string) => void
@@ -55,6 +61,9 @@ export function ApprovalWorkflow({
     rawDataWithConfidence,
     complianceChecks,
     complianceDescriptions,
+    riskLevel = 'MEDIUM',
+    requiresManualReview = false,
+    recommendations = [],
     extractionConfidence,
     complianceConfidence,
     onApprove,
@@ -69,6 +78,7 @@ export function ApprovalWorkflow({
     const [returnReason, setReturnReason] = useState('')
     const [returnComment, setReturnComment] = useState('')
     const [showReturnDialog, setShowReturnDialog] = useState(false)
+    const [showRecommendations, setShowRecommendations] = useState(requiresManualReview)
 
     // Track which fields have been manually edited
     const [editedFields, setEditedFields] = useState<Set<keyof CustomsDeclaration>>(new Set())
@@ -336,6 +346,53 @@ export function ApprovalWorkflow({
                             <p className="text-sm text-foreground">{reviewReason}</p>
                         </div>
                     </div>
+
+                    {/* Risk Level Badge */}
+                    {riskLevel && riskLevel !== 'LOW' && (
+                        <div className="mt-3 flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">Risk Level:</span>
+                            <Badge 
+                                variant={riskLevel === 'CRITICAL' ? 'destructive' : riskLevel === 'HIGH' ? 'destructive' : 'secondary'}
+                                className={riskLevel === 'MEDIUM' ? 'bg-warning/20 text-warning border-warning/30' : ''}
+                            >
+                                {riskLevel}
+                            </Badge>
+                        </div>
+                    )}
+
+                    {/* Recommendations Panel */}
+                    {recommendations.length > 0 && (
+                        <div className="mt-4">
+                            <button
+                                onClick={() => setShowRecommendations(!showRecommendations)}
+                                className="w-full flex items-center justify-between p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg hover:bg-blue-500/15 transition-colors"
+                            >
+                                <div className="flex items-center gap-2">
+                                    <Lightbulb size={16} className="text-blue-500" weight="duotone" />
+                                    <span className="text-sm font-medium text-blue-600 dark:text-blue-400">
+                                        AI Recommendations ({recommendations.length})
+                                    </span>
+                                </div>
+                                {showRecommendations ? (
+                                    <CaretUp size={16} className="text-blue-500" />
+                                ) : (
+                                    <CaretDown size={16} className="text-blue-500" />
+                                )}
+                            </button>
+                            {showRecommendations && (
+                                <div className="mt-2 p-3 bg-blue-500/5 border border-blue-500/10 rounded-lg">
+                                    <ul className="space-y-2">
+                                        {recommendations.map((rec, idx) => (
+                                            <li key={idx} className="flex items-start gap-2 text-sm">
+                                                <span className="text-blue-500 mt-0.5">•</span>
+                                                <span className="text-foreground/80">{rec}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             </Card>
 

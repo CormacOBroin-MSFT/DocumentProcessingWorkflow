@@ -2,6 +2,8 @@
 Flask Application Factory
 Creates and configures the Flask application with CORS and blueprints
 Serves both API endpoints and static frontend files in production
+
+NOTE: OpenTelemetry tracing is configured in run.py at startup (before any imports).
 """
 import logging
 from flask import Flask, jsonify, send_from_directory, request

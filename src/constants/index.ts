@@ -77,7 +77,7 @@ export const WORKFLOW_STAGES = [
     { name: 'Compliance Check', label: 'Automated Validation' },
     { name: 'Approval Workflow', label: 'Human Review' },
     { name: 'Customs Submission', label: 'Authority Filing' },
-    { name: 'CosmosDB', label: 'Analytics Store' },
+    { name: 'CosmosDB', label: 'NoSQL Database' },
 ] as const
 
 // Return to automation reasons

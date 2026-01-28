@@ -1,207 +1,197 @@
 """
 Azure AI Foundry Workflow Client
-Orchestrates the customs compliance workflow by calling Foundry agents
+Invokes the customs compliance workflow deployed in Azure AI Foundry.
 
-Uses agent_framework with AzureAIProjectAgentProvider to call persistent agents
-created in Azure AI Foundry.
+This uses the OpenAI-compatible client to call the workflow directly,
+letting Foundry handle the orchestration of all agents server-side.
+
+TRACING: OpenTelemetry tracing is configured in run.py at application startup.
 """
 import os
 import json
 import logging
-import asyncio
-from pathlib import Path
-from typing import Dict, Any, Optional, List
+import re
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger('autonomousflow.workflow_client')
 
 # Configuration from environment
 AZURE_AI_PROJECT_ENDPOINT = os.getenv("AZURE_AI_PROJECT_ENDPOINT")
-AZURE_AI_MODEL_DEPLOYMENT_NAME = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-41")
+
+# Workflow configuration
+WORKFLOW_NAME = "customs-compliance-workflow"
+WORKFLOW_VERSION = "2"
 
 
-def setup_tracing():
-    """Configure OpenTelemetry tracing for workflow visualization."""
+def is_tracing_enabled() -> bool:
+    """Check if OpenTelemetry tracing is configured."""
     try:
-        from agent_framework.observability import configure_otel_providers
-        
-        configure_otel_providers(
-            vs_code_extension_port=4317,  # AI Toolkit gRPC port
-            enable_sensitive_data=True,   # Capture prompts and completions
-        )
-        logger.info("OpenTelemetry tracing enabled (AI Toolkit port 4317)")
-        return True
-    except ImportError as e:
-        logger.warning(f"agent_framework tracing not available: {e}")
-        return False
-    except Exception as e:
-        logger.warning(f"Could not enable tracing: {e}")
+        from opentelemetry import trace
+        provider = trace.get_tracer_provider()
+        return provider is not None and type(provider).__name__ != 'NoOpTracerProvider'
+    except ImportError:
         return False
 
 
 class WorkflowClient:
-    """Client for executing Azure AI Foundry agent workflows using agent_framework"""
+    """
+    Client for executing Azure AI Foundry workflows.
     
-    def __init__(self, enable_tracing: bool = True):
+    Uses the OpenAI-compatible client to invoke workflows directly,
+    allowing Foundry to orchestrate the agent execution server-side.
+    """
+    
+    def __init__(self):
         if not AZURE_AI_PROJECT_ENDPOINT:
             raise ValueError("AZURE_AI_PROJECT_ENDPOINT environment variable required")
         
         self.endpoint = AZURE_AI_PROJECT_ENDPOINT
-        self._tracing_enabled = False
+        self._tracing_enabled = is_tracing_enabled()
         
-        if enable_tracing:
-            self._tracing_enabled = setup_tracing()
-        
-        # Agent IDs file
-        self.agent_ids_file = Path(__file__).parent.parent.parent.parent / "agents" / ".foundry_agent_ids.json"
+        if self._tracing_enabled:
+            logger.info("✓ Tracing enabled - spans will appear in AI Toolkit")
     
-    async def run_compliance_workflow(self, declaration_data: Dict[str, Any]) -> Dict[str, Any]:
+    def run_compliance_workflow(self, declaration_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute the customs compliance workflow by calling Foundry agents.
+        Execute the customs compliance workflow via Azure AI Foundry.
         
-        Uses agent_framework.azure.AzureAIProjectAgentProvider to get agents
-        from Foundry by name, then runs them concurrently.
-        
-        Fan-out pattern: 7 specialist agents run concurrently
-        Fan-in pattern: Aggregator combines all results
+        The workflow is executed server-side in Foundry, which handles:
+        - Fan-out to specialist agents
+        - Agent tool invocations (Azure AI Search, etc.)
+        - Fan-in aggregation
+        - Response streaming
         
         Args:
             declaration_data: The customs declaration to analyze
             
         Returns:
-            ComplianceReport JSON from the aggregator agent
+            ComplianceReport JSON from the workflow
         """
-        from azure.identity.aio import AzureCliCredential
-        from azure.ai.projects.aio import AIProjectClient
-        from agent_framework.azure import AzureAIProjectAgentProvider
+        from azure.identity import DefaultAzureCredential
+        from azure.ai.projects import AIProjectClient
+        from azure.ai.projects.models import ResponseStreamEventType
         
         logger.info("=" * 60)
-        logger.info("🚀 STARTING COMPLIANCE WORKFLOW (Azure AI Foundry Agents)")
-        logger.info(f"   Declaration ID: {declaration_data.get('declaration_id', 'N/A')}")
-        logger.info(f"   Endpoint: {self.endpoint}")
+        logger.info("🚀 INVOKING FOUNDRY WORKFLOW: %s (v%s)", WORKFLOW_NAME, WORKFLOW_VERSION)
+        logger.info("   Declaration ID: %s", declaration_data.get('declaration_id', 'N/A'))
+        logger.info("   Endpoint: %s", self.endpoint)
         logger.info("=" * 60)
         
-        # Specialist agents (will run in parallel)
-        specialist_agents = [
-            "DocumentConsistencyAgent",
-            "HSCodeValidationAgent",
-            "CountryRestrictionsAgent",
-            "CountryOfOriginAgent",
-            "ControlledGoodsAgent",
-            "ValueReasonablenessAgent",
-            "ShipperVerificationAgent",
-        ]
+        # Format input message
+        input_message = f"""Analyze this customs declaration for compliance:
+
+```json
+{json.dumps(declaration_data, indent=2)}
+```
+
+Run all compliance checks and return a ComplianceReport JSON."""
         
-        # Format input for agents
-        input_message = json.dumps(declaration_data, indent=2)
+        credential = DefaultAzureCredential()
+        project_client = AIProjectClient(
+            endpoint=self.endpoint,
+            credential=credential,
+        )
         
-        async with AzureCliCredential() as credential:
-            async with AIProjectClient(
-                endpoint=self.endpoint,
-                credential=credential,
-            ) as project_client:
+        workflow_config = {
+            "name": WORKFLOW_NAME,
+            "version": WORKFLOW_VERSION,
+        }
+        
+        final_response = ""
+        workflow_actions = []
+        
+        with project_client:
+            openai_client = project_client.get_openai_client()
+            
+            # Create conversation
+            conversation = openai_client.conversations.create()
+            logger.info("📝 Created conversation: %s", conversation.id)
+            
+            try:
+                # Invoke workflow with streaming
+                logger.info("\n📤 Invoking workflow...")
+                stream = openai_client.responses.create(
+                    conversation=conversation.id,
+                    extra_body={
+                        "agent": {
+                            "name": workflow_config["name"],
+                            "type": "agent_reference"
+                        }
+                    },
+                    input=input_message,
+                    stream=True,
+                    metadata={"x-ms-debug-mode-enabled": "1"},
+                )
                 
-                # Create provider for getting agents from Foundry
-                provider = AzureAIProjectAgentProvider(project_client=project_client)
+                current_action = None
                 
-                # Phase 1: Fan-out - Call all specialist agents concurrently
-                logger.info("\n📤 PHASE 1: FAN-OUT (7 specialist agents)")
-                
-                tasks = []
-                for agent_name in specialist_agents:
-                    task = self._call_agent_via_provider(
-                        provider,
-                        agent_name,
-                        input_message,
-                    )
-                    tasks.append(task)
-                
-                # Execute all agents concurrently
-                agent_results = await asyncio.gather(*tasks, return_exceptions=True)
-                
-                # Collect outputs
-                specialist_outputs = {}
-                for agent_name, result in zip(specialist_agents, agent_results):
-                    if isinstance(result, Exception):
-                        logger.error(f"   ❌ {agent_name}: {result}")
-                        specialist_outputs[agent_name] = {"error": str(result)}
+                for event in stream:
+                    if event.type == ResponseStreamEventType.RESPONSE_OUTPUT_TEXT_DELTA:
+                        # Accumulate response text
+                        final_response += event.delta
+                        
+                    elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_TEXT_DONE:
+                        logger.debug("Response text complete")
+                        
+                    elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_ITEM_ADDED:
+                        if hasattr(event, 'item') and event.item.type == "workflow_action":
+                            action_id = getattr(event.item, 'action_id', 'unknown')
+                            status = getattr(event.item, 'status', 'unknown')
+                            logger.info("   🔄 Action started: %s", action_id)
+                            current_action = action_id
+                            workflow_actions.append({
+                                "action_id": action_id,
+                                "status": "started"
+                            })
+                            
+                    elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_ITEM_DONE:
+                        if hasattr(event, 'item') and event.item.type == "workflow_action":
+                            action_id = getattr(event.item, 'action_id', 'unknown')
+                            status = getattr(event.item, 'status', 'completed')
+                            prev_action = getattr(event.item, 'previous_action_id', None)
+                            logger.info("   ✅ Action complete: %s (status: %s)", action_id, status)
+                            # Update action in list
+                            for action in workflow_actions:
+                                if action["action_id"] == action_id:
+                                    action["status"] = status
+                                    action["previous_action_id"] = prev_action
+                                    
+                    elif event.type == ResponseStreamEventType.RESPONSE_COMPLETED:
+                        logger.info("📥 Workflow response complete")
+                        
                     else:
-                        logger.info(f"   ✅ {agent_name}: Response received")
-                        specialist_outputs[agent_name] = result
+                        # Log other event types for debugging
+                        logger.debug("Event: %s", event.type)
                 
-                # Phase 2: Fan-in - Build handoff packet and call aggregator
-                logger.info("\n📥 PHASE 2: FAN-IN (aggregator)")
-                
-                # Build handoff packet with all specialist outputs
-                handoff_packet = "# Customs Declaration\n"
-                handoff_packet += input_message + "\n\n"
-                handoff_packet += "# Agent Analysis Results\n\n"
-                
-                for agent_name, output in specialist_outputs.items():
-                    handoff_packet += f"## {agent_name}\n"
-                    if isinstance(output, dict):
-                        handoff_packet += json.dumps(output, indent=2)
-                    else:
-                        handoff_packet += str(output)
-                    handoff_packet += "\n\n"
-                
-                # Call aggregator
-                aggregator_name = "ComplianceAggregatorAgent"
+            finally:
+                # Clean up conversation
                 try:
-                    final_result = await self._call_agent_via_provider(
-                        provider,
-                        aggregator_name,
-                        handoff_packet,
-                    )
-                    logger.info(f"   ✅ {aggregator_name}: Aggregation complete")
+                    openai_client.conversations.delete(conversation_id=conversation.id)
+                    logger.debug("Conversation deleted")
                 except Exception as e:
-                    logger.error(f"   ❌ Aggregator failed: {e}")
-                    final_result = self._create_fallback_report(specialist_outputs)
-                
-                logger.info("\n" + "=" * 60)
-                logger.info("✅ WORKFLOW COMPLETE")
-                logger.info("=" * 60)
-                
-                return final_result
-    
-    async def _call_agent_via_provider(
-        self,
-        provider,
-        agent_name: str,
-        message: str,
-    ) -> Dict[str, Any]:
-        """Call a Foundry agent using AzureAIProjectAgentProvider"""
+                    logger.warning("Could not delete conversation: %s", e)
         
-        logger.debug(f"Getting agent: {agent_name}")
+        logger.info("\n" + "=" * 60)
+        logger.info("✅ WORKFLOW COMPLETE")
+        logger.info("   Actions executed: %d", len(workflow_actions))
+        logger.info("=" * 60)
         
-        try:
-            # Get the agent from Foundry by name
-            agent = await provider.get_agent(name=agent_name)
-            
-            logger.debug(f"Running agent: {agent_name}")
-            
-            # Run the agent with the message
-            result = await agent.run(message)
-            
-            # Extract response text
-            if hasattr(result, 'text'):
-                response_text = result.text
-            elif hasattr(result, 'value'):
-                response_text = result.value
-            else:
-                response_text = str(result)
-            
-            logger.debug(f"Agent {agent_name} response: {response_text[:200]}...")
-            
-            return self._parse_json_response(response_text)
-            
-        except Exception as e:
-            logger.error(f"Error calling agent {agent_name}: {e}")
-            raise
+        # Parse the response
+        result = self._parse_json_response(final_response)
+        
+        # Add workflow metadata
+        result["_workflow_metadata"] = {
+            "workflow_name": WORKFLOW_NAME,
+            "workflow_version": WORKFLOW_VERSION,
+            "actions_executed": workflow_actions,
+        }
+        
+        return result
     
     def _parse_json_response(self, response: str) -> Dict:
-        """Extract and parse JSON from agent response"""
+        """Extract and parse JSON from workflow response"""
         if not response:
-            return {}
+            return {"error": "Empty response from workflow"}
         
         # Try direct parse
         try:
@@ -209,8 +199,7 @@ class WorkflowClient:
         except json.JSONDecodeError:
             pass
         
-        # Try to find JSON in the response (between ```json and ```)
-        import re
+        # Try to find JSON in markdown code block
         json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
         if json_match:
             try:
@@ -226,67 +215,27 @@ class WorkflowClient:
             except json.JSONDecodeError:
                 pass
         
-        # Return as raw text wrapped in dict
+        # Return raw response
         return {"raw_response": response}
-    
-    def _create_fallback_report(self, specialist_outputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a basic compliance report if aggregator fails"""
-        findings = []
-        for agent_name, output in specialist_outputs.items():
-            if isinstance(output, dict):
-                if "findings" in output:
-                    findings.extend(output["findings"])
-                elif "error" in output:
-                    findings.append({
-                        "source_agent": agent_name,
-                        "severity": "high",
-                        "code": "AGENT_ERROR",
-                        "title": f"{agent_name} Error",
-                        "description": output["error"]
-                    })
-        
-        return {
-            "overall_risk": "medium",
-            "summary": "Compliance analysis completed (aggregator unavailable)",
-            "findings": findings,
-            "agents_reporting": {
-                name: "error" if isinstance(out, dict) and "error" in out else "success"
-                for name, out in specialist_outputs.items()
-            },
-            "requires_manual_review": True,
-            "recommendations": ["Manual review recommended - aggregation incomplete"]
-        }
 
 
 # Singleton instance
 _workflow_client: Optional[WorkflowClient] = None
 
 
-def get_workflow_client() -> Optional[WorkflowClient]:
+def get_workflow_client() -> WorkflowClient:
     """Get or create workflow client instance"""
     global _workflow_client
     if _workflow_client is None:
-        try:
-            _workflow_client = WorkflowClient(enable_tracing=True)
-            logger.info("✓ Workflow client initialized")
-        except Exception as e:
-            logger.error(f"Could not initialize workflow client: {e}")
-            raise  # Don't return None, raise the error
+        _workflow_client = WorkflowClient()
+        logger.info("✓ Workflow client initialized")
     return _workflow_client
 
 
 def run_compliance_workflow_sync(declaration_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Synchronous wrapper for running the compliance workflow.
+    Synchronous function to run the compliance workflow.
     Use this from Flask routes.
     """
     client = get_workflow_client()
-    if not client:
-        raise RuntimeError("Workflow client not available")
-    
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(client.run_compliance_workflow(declaration_data))
-    finally:
-        loop.close()
+    return client.run_compliance_workflow(declaration_data)
