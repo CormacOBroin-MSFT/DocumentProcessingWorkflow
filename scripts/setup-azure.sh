@@ -64,15 +64,21 @@ echo ""
 # Check if resources already exist
 AI_SERVICES_NAME="${BASE_NAME}-foundry"
 STORAGE_NAME="${BASE_NAME//-/}storage"
+COSMOS_ACCOUNT_NAME="${BASE_NAME}-cosmos"
 
 log_step "Checking for existing resources..."
 EXISTING_AI=$(az cognitiveservices account show --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP 2>/dev/null || echo "")
+EXISTING_COSMOS=$(az cosmosdb show --name $COSMOS_ACCOUNT_NAME --resource-group $RESOURCE_GROUP 2>/dev/null || echo "")
 
 # Decide if we need to run Bicep deployment
 NEED_BICEP_DEPLOY="false"
 if [ -z "$EXISTING_AI" ]; then
     NEED_BICEP_DEPLOY="true"
     log_step "AI Services not found, will deploy..."
+fi
+if [ -z "$EXISTING_COSMOS" ]; then
+    NEED_BICEP_DEPLOY="true"
+    log_step "Cosmos DB not found, will deploy..."
 fi
 
 if [ "$NEED_BICEP_DEPLOY" = "true" ]; then
@@ -84,6 +90,7 @@ if [ "$NEED_BICEP_DEPLOY" = "true" ]; then
     echo "     • Storage Account: ${STORAGE_NAME}"
     echo "     • AI Services: ${AI_SERVICES_NAME}"
     echo "     • Azure AI Search: ${BASE_NAME}-search"
+    echo "     • Cosmos DB: ${COSMOS_ACCOUNT_NAME}"
     echo "     • Foundry Project: ${BASE_NAME}-project"
     echo "     • Model Deployments: gpt-41, gpt-41-mini, text-embedding-3-large"
     echo ""
@@ -124,6 +131,8 @@ if [ "$NEED_BICEP_DEPLOY" = "true" ]; then
     OPENAI_DEPLOYMENT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.openAIDeploymentName.value')
     SEARCH_SERVICE_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.searchServiceName.value')
     SEARCH_ENDPOINT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.searchServiceEndpoint.value')
+    COSMOS_ENDPOINT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.cosmosDbEndpoint.value')
+    COSMOS_ACCOUNT_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.cosmosDbAccountName.value')
     
     log_success "Microsoft Foundry (new) project created: $AI_PROJECT_NAME"
     
@@ -138,6 +147,8 @@ else
     CU_ENDPOINT=$(az cognitiveservices account show --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP --query properties.endpoint -o tsv)
     OPENAI_ENDPOINT=$CU_ENDPOINT
     OPENAI_DEPLOYMENT=$(az cognitiveservices account deployment list --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP --query "[?contains(name, 'gpt-41')].name | [0]" -o tsv 2>/dev/null || echo "gpt-41")
+    # Get Cosmos DB endpoint for existing deployments
+    COSMOS_ENDPOINT=$(az cosmosdb show --name $COSMOS_ACCOUNT_NAME --resource-group $RESOURCE_GROUP --query documentEndpoint -o tsv 2>/dev/null || echo "")
 fi
 
 echo ""
@@ -185,6 +196,19 @@ if [ -n "$USER_OBJECT_ID" ]; then
     --role "Search Service Contributor" \
     --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
     --output none 2>/dev/null || log_warning "Role may already exist"
+  
+  # Cosmos DB requires SQL Role Assignment for data plane access (different from Azure RBAC)
+  # Built-in Data Contributor role ID: 00000000-0000-0000-0000-000000000002
+  # We need ACCOUNT-LEVEL scope (not database-level) for the SDK to read metadata
+  COSMOS_ACCOUNT_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.DocumentDB/databaseAccounts/$COSMOS_ACCOUNT_NAME"
+  echo "   Assigning Cosmos DB SQL Role (Data Contributor) at account level..."
+  az cosmosdb sql role assignment create \
+    --account-name $COSMOS_ACCOUNT_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --role-definition-id "00000000-0000-0000-0000-000000000002" \
+    --principal-id $USER_OBJECT_ID \
+    --scope "$COSMOS_ACCOUNT_ID" \
+    --output none 2>/dev/null || log_warning "Cosmos DB role may already exist"
   
   log_success "User role assignments complete"
 fi
@@ -282,6 +306,11 @@ log_step "Creating $ENV_FILE..."
   echo "AZURE_SEARCH_ENDPOINT=${SEARCH_ENDPOINT:-https://${BASE_NAME}-search.search.windows.net}"
   echo "AZURE_SEARCH_CONNECTION_NAME=${SEARCH_SERVICE_NAME:-${BASE_NAME}-search}"
   echo ""
+  echo "# Azure Cosmos DB (uses Azure CLI credentials)"
+  echo "AZURE_COSMOS_ENDPOINT=${COSMOS_ENDPOINT}"
+  echo "AZURE_COSMOS_DATABASE=customs-workflow"
+  echo "AZURE_COSMOS_CONTAINER=declarations"
+  echo ""
   echo "# Flask"
   echo "FLASK_ENV=development"
   echo "FLASK_DEBUG=true"
@@ -297,6 +326,7 @@ echo "   Foundry Resource:    $AI_SERVICES_NAME"
 echo "   Foundry Project:     ${AI_PROJECT_NAME:-${BASE_NAME}-project}"
 echo "   OpenAI Deployment:   $OPENAI_DEPLOYMENT"
 echo "   AI Search Service:   ${SEARCH_SERVICE_NAME:-${BASE_NAME}-search}"
+echo "   Cosmos DB Endpoint:  ${COSMOS_ENDPOINT}"
 echo "   CU Endpoint:         $CU_ENDPOINT"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
