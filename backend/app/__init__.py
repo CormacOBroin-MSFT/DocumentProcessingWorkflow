@@ -6,25 +6,60 @@ Serves both API endpoints and static frontend files in production
 NOTE: OpenTelemetry tracing is configured in run.py at startup (before any imports).
 """
 import logging
+import sys
 from flask import Flask, jsonify, send_from_directory, request
 from flask_cors import CORS
 from dotenv import load_dotenv
 import os
 
-def create_app():
-    load_dotenv()
-    
-    # Configure logging
+def setup_logging():
+    """
+    Configure logging to work properly with Gunicorn in production.
+    Ensures logs are written to stdout for Azure App Service to capture.
+    """
     log_level = logging.DEBUG if os.environ.get('FLASK_DEBUG', '').lower() == 'true' else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    
+    # Create formatter
+    formatter = logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    logger = logging.getLogger('autonomousflow')
+    
+    # Create stdout handler (Azure App Service captures stdout)
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(formatter)
+    stdout_handler.setLevel(log_level)
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+    
+    # Remove any existing handlers to avoid duplicates
+    root_logger.handlers = []
+    root_logger.addHandler(stdout_handler)
+    
+    # Configure our app logger
+    app_logger = logging.getLogger('autonomousflow')
+    app_logger.setLevel(log_level)
+    
+    # Also configure gunicorn's error logger if running under gunicorn
+    gunicorn_logger = logging.getLogger('gunicorn.error')
+    if gunicorn_logger.handlers:
+        # If gunicorn is present, use its handlers for our logger too
+        for handler in gunicorn_logger.handlers:
+            app_logger.addHandler(handler)
+        app_logger.setLevel(gunicorn_logger.level)
     
     # Suppress noisy werkzeug access logs
     logging.getLogger('werkzeug').setLevel(logging.WARNING)
+    
+    return app_logger
+
+def create_app():
+    load_dotenv()
+    
+    # Configure logging for production (works with Gunicorn)
+    logger = setup_logging()
     
     # Check for static files (production build)
     static_folder = os.path.join(os.path.dirname(__file__), '..', 'static')

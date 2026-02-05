@@ -99,77 +99,114 @@ Run all compliance checks and return a ComplianceReport JSON."""
         
         final_response = ""
         workflow_actions = []
+        conversation = None
+        
+        # Retry logic with new conversation on each attempt
+        max_retries = 2
+        last_error = None
         
         with project_client:
             openai_client = project_client.get_openai_client()
             
-            # Create conversation
-            conversation = openai_client.conversations.create()
-            logger.info("📝 Created conversation: %s", conversation.id)
-            
-            try:
-                # Invoke workflow with streaming
-                logger.info("\n📤 Invoking workflow...")
-                stream = openai_client.responses.create(
-                    conversation=conversation.id,
-                    extra_body={
-                        "agent": {
-                            "name": workflow_config["name"],
-                            "type": "agent_reference"
-                        }
-                    },
-                    input=input_message,
-                    stream=True,
-                    metadata={"x-ms-debug-mode-enabled": "1"},
-                )
-                
-                current_action = None
-                
-                for event in stream:
-                    if event.type == ResponseStreamEventType.RESPONSE_OUTPUT_TEXT_DELTA:
-                        # Accumulate response text
-                        final_response += event.delta
-                        
-                    elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_TEXT_DONE:
-                        logger.debug("Response text complete")
-                        
-                    elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_ITEM_ADDED:
-                        if hasattr(event, 'item') and event.item.type == "workflow_action":
-                            action_id = getattr(event.item, 'action_id', 'unknown')
-                            status = getattr(event.item, 'status', 'unknown')
-                            logger.info("   🔄 Action started: %s", action_id)
-                            current_action = action_id
-                            workflow_actions.append({
-                                "action_id": action_id,
-                                "status": "started"
-                            })
-                            
-                    elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_ITEM_DONE:
-                        if hasattr(event, 'item') and event.item.type == "workflow_action":
-                            action_id = getattr(event.item, 'action_id', 'unknown')
-                            status = getattr(event.item, 'status', 'completed')
-                            prev_action = getattr(event.item, 'previous_action_id', None)
-                            logger.info("   ✅ Action complete: %s (status: %s)", action_id, status)
-                            # Update action in list
-                            for action in workflow_actions:
-                                if action["action_id"] == action_id:
-                                    action["status"] = status
-                                    action["previous_action_id"] = prev_action
-                                    
-                    elif event.type == ResponseStreamEventType.RESPONSE_COMPLETED:
-                        logger.info("📥 Workflow response complete")
-                        
-                    else:
-                        # Log other event types for debugging
-                        logger.debug("Event: %s", event.type)
-                
-            finally:
-                # Clean up conversation
+            for attempt in range(max_retries + 1):
+                conversation = None
                 try:
-                    openai_client.conversations.delete(conversation_id=conversation.id)
-                    logger.debug("Conversation deleted")
+                    # Create a NEW conversation for each attempt
+                    conversation = openai_client.conversations.create()
+                    logger.info("📝 Created conversation: %s (attempt %d/%d)", 
+                               conversation.id, attempt + 1, max_retries + 1)
+                    
+                    # Reset accumulators for this attempt
+                    final_response = ""
+                    workflow_actions = []
+                    
+                    # Invoke workflow with streaming
+                    logger.info("\n📤 Invoking workflow...")
+                    stream = openai_client.responses.create(
+                        conversation=conversation.id,
+                        extra_body={
+                            "agent": {
+                                "name": workflow_config["name"],
+                                "type": "agent_reference"
+                            }
+                        },
+                        input=input_message,
+                        stream=True,
+                        metadata={"x-ms-debug-mode-enabled": "1"},
+                        timeout=180.0,  # 3 minute timeout
+                    )
+                    
+                    current_action = None
+                    
+                    for event in stream:
+                        if event.type == ResponseStreamEventType.RESPONSE_OUTPUT_TEXT_DELTA:
+                            # Accumulate response text
+                            final_response += event.delta
+                            
+                        elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_TEXT_DONE:
+                            logger.debug("Response text complete")
+                            
+                        elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_ITEM_ADDED:
+                            if hasattr(event, 'item') and event.item.type == "workflow_action":
+                                action_id = getattr(event.item, 'action_id', 'unknown')
+                                status = getattr(event.item, 'status', 'unknown')
+                                logger.info("   🔄 Action started: %s", action_id)
+                                current_action = action_id
+                                workflow_actions.append({
+                                    "action_id": action_id,
+                                    "status": "started"
+                                })
+                                
+                        elif event.type == ResponseStreamEventType.RESPONSE_OUTPUT_ITEM_DONE:
+                            if hasattr(event, 'item') and event.item.type == "workflow_action":
+                                action_id = getattr(event.item, 'action_id', 'unknown')
+                                status = getattr(event.item, 'status', 'completed')
+                                prev_action = getattr(event.item, 'previous_action_id', None)
+                                logger.info("   ✅ Action complete: %s (status: %s)", action_id, status)
+                                # Update action in list
+                                for action in workflow_actions:
+                                    if action["action_id"] == action_id:
+                                        action["status"] = status
+                                        action["previous_action_id"] = prev_action
+                                        
+                        elif event.type == ResponseStreamEventType.RESPONSE_COMPLETED:
+                            logger.info("📥 Workflow response complete")
+                            
+                        else:
+                            # Log other event types for debugging
+                            logger.debug("Event: %s", event.type)
+                    
+                    # Success - break out of retry loop
+                    last_error = None
+                    break
+                    
                 except Exception as e:
-                    logger.warning("Could not delete conversation: %s", e)
+                    last_error = e
+                    logger.warning("⚠️ Attempt %d failed: %s", attempt + 1, str(e)[:100])
+                    
+                    # Don't retry on 400 errors (bad request)
+                    if "400" in str(e) or "bad_request" in str(e).lower():
+                        logger.error("❌ Bad request error - not retrying")
+                        break
+                    
+                    if attempt < max_retries:
+                        import time
+                        wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s
+                        logger.info("   Retrying in %ds...", wait_time)
+                        time.sleep(wait_time)
+                        
+                finally:
+                    # Clean up conversation for this attempt
+                    if conversation:
+                        try:
+                            openai_client.conversations.delete(conversation_id=conversation.id)
+                            logger.debug("Conversation deleted")
+                        except Exception as e:
+                            logger.debug("Could not delete conversation: %s", e)
+            
+            # After retry loop - check if we succeeded
+            if last_error:
+                raise last_error
         
         logger.info("\n" + "=" * 60)
         logger.info("✅ WORKFLOW COMPLETE")
