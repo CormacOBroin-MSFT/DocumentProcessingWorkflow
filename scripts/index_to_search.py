@@ -79,17 +79,26 @@ def get_search_endpoint() -> str:
     return f"https://{SEARCH_SERVICE_NAME}.search.windows.net"
 
 
+def get_credential():
+    """Get credential - API key if available, otherwise DefaultAzureCredential."""
+    api_key = os.environ.get('AZURE_SEARCH_KEY') or os.environ.get('AZURE_SEARCH_ADMIN_KEY')
+    if api_key:
+        logger.info("Using API key for authentication")
+        return AzureKeyCredential(api_key)
+    return DefaultAzureCredential()
+
+
 def get_index_client() -> SearchIndexClient:
     """Get the Search Index Client for managing indexes."""
     endpoint = get_search_endpoint()
-    credential = DefaultAzureCredential()
+    credential = get_credential()
     return SearchIndexClient(endpoint=endpoint, credential=credential)
 
 
 def get_search_client(index_name: str) -> SearchClient:
     """Get the Search Client for a specific index."""
     endpoint = get_search_endpoint()
-    credential = DefaultAzureCredential()
+    credential = get_credential()
     return SearchClient(endpoint=endpoint, index_name=index_name, credential=credential)
 
 

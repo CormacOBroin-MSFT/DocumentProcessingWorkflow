@@ -1,5 +1,5 @@
 // Infrastructure for local development only
-// Creates: Storage Account, Microsoft Foundry (new) resource + project + GPT model deployment, Azure AI Search
+// Creates: Storage Account, Microsoft Foundry (new) resource + project + GPT model deployment, Azure AI Search, Cosmos DB
 // Does NOT create: App Service, Key Vault (not needed locally)
 
 @description('Base name for all resources')
@@ -150,6 +150,64 @@ resource searchService 'Microsoft.Search/searchServices@2024-06-01-preview' = {
   }
 }
 
+// Cosmos DB Account for storing processed customs declarations
+// Using serverless capacity mode for cost-effective local development
+resource cosmosDbAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
+  name: '${baseName}-cosmos'
+  location: location
+  kind: 'GlobalDocumentDB'
+  properties: {
+    databaseAccountOfferType: 'Standard'
+    consistencyPolicy: {
+      defaultConsistencyLevel: 'Session'
+    }
+    locations: [
+      {
+        locationName: location
+        failoverPriority: 0
+        isZoneRedundant: false
+      }
+    ]
+    capabilities: [
+      {
+        name: 'EnableServerless'
+      }
+    ]
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+// Cosmos DB Database
+resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-05-15' = {
+  parent: cosmosDbAccount
+  name: 'customs-workflow'
+  properties: {
+    resource: {
+      id: 'customs-workflow'
+    }
+  }
+}
+
+// Cosmos DB Container for customs declarations
+// Partition key on documentId for efficient single-document operations
+resource cosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  parent: cosmosDatabase
+  name: 'declarations'
+  properties: {
+    resource: {
+      id: 'declarations'
+      partitionKey: {
+        paths: ['/documentId']
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        automatic: true
+        indexingMode: 'consistent'
+      }
+    }
+  }
+}
+
 // Outputs
 output storageAccountName string = storageAccount.name
 output contentUnderstandingEndpoint string = aiFoundry.properties.endpoint
@@ -159,3 +217,5 @@ output openAIEndpoint string = aiFoundry.properties.endpoint
 output openAIDeploymentName string = gpt41Deployment.name
 output searchServiceName string = searchService.name
 output searchServiceEndpoint string = 'https://${searchService.name}.search.windows.net'
+output cosmosDbEndpoint string = cosmosDbAccount.properties.documentEndpoint
+output cosmosDbAccountName string = cosmosDbAccount.name

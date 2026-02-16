@@ -68,6 +68,15 @@ const ComplianceResponseSchema = z.object({
     issue_descriptions: z.array(z.string()).optional(),
     reasoning: z.string().optional(),
     risk_level: z.string().optional(),
+    requires_manual_review: z.boolean().optional(),
+    recommendations: z.array(z.string()).optional(),
+    findings: z.array(z.object({
+        code: z.string().optional(),
+        title: z.string().optional(),
+        description: z.string().optional(),
+        severity: z.string().optional(),
+        source_agent: z.string().optional(),
+    })).optional(),
 })
 
 // ----- API Functions -----
@@ -221,11 +230,24 @@ function getFieldValue(data: Record<string, unknown>, key: string): string {
     return ''
 }
 
+// Compliance finding type
+export type ComplianceFinding = {
+    code?: string
+    title?: string
+    description?: string
+    severity?: string
+    source_agent?: string
+}
+
 // Perform compliance validation
 export async function performComplianceCheck(data: CustomsDeclaration): Promise<{
     checks: boolean[]
     complianceConfidence: number
     issueDescriptions: string[]
+    riskLevel: string
+    requiresManualReview: boolean
+    recommendations: string[]
+    findings: ComplianceFinding[]
 }> {
     const response = await fetch(`${API_CONFIG.BASE_URL}/api/compliance/validate`, {
         method: 'POST',
@@ -243,6 +265,10 @@ export async function performComplianceCheck(data: CustomsDeclaration): Promise<
         checks: result.checks,
         complianceConfidence: result.compliance_confidence,
         issueDescriptions: result.issue_descriptions || [],
+        riskLevel: result.risk_level || 'MEDIUM',
+        requiresManualReview: result.requires_manual_review || false,
+        recommendations: result.recommendations || [],
+        findings: result.findings || [],
     }
 }
 

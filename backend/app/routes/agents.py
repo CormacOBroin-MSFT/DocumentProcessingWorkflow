@@ -16,6 +16,7 @@ import asyncio
 import logging
 import os
 import sys
+import threading
 from flask import Blueprint, request, jsonify
 
 # Add agents module to path
@@ -30,15 +31,41 @@ _hs_service = None
 _sanctions_service = None
 _services_initialized = False
 
+# Shared event loop for async operations (avoid creating new loops per request)
+_event_loop = None
+_loop_lock = threading.Lock()
+
+
+def _get_or_create_event_loop():
+    """Get or create a shared event loop for async operations."""
+    global _event_loop
+    with _loop_lock:
+        if _event_loop is None or _event_loop.is_closed():
+            _event_loop = asyncio.new_event_loop()
+        return _event_loop
+
 
 def _run_async(coro):
-    """Run an async coroutine in a sync context."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    """Run an async coroutine using a shared event loop for better performance."""
+    loop = _get_or_create_event_loop()
+    # Use run_coroutine_threadsafe for thread safety with Flask
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    
+    # Start loop in background thread if not running
+    if not loop.is_running():
+        def run_loop():
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+        
+        thread = threading.Thread(target=run_loop, daemon=True)
+        thread.start()
+    
     try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+        # Wait for result with timeout
+        return future.result(timeout=300)  # 5 minute timeout for long workflows
+    except Exception as e:
+        logger.error(f"Async execution failed: {e}")
+        raise
 
 
 def _initialize_services():
