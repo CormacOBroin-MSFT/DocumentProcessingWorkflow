@@ -209,7 +209,50 @@ if [ -n "$USER_OBJECT_ID" ]; then
     --principal-id $USER_OBJECT_ID \
     --scope "$COSMOS_ACCOUNT_ID" \
     --output none 2>/dev/null || log_warning "Cosmos DB role may already exist"
-  
+
+  # Ensure Cosmos DB public network access is enabled and developer IP is whitelisted.
+  # Azure Policy or Defender for Cloud can override the Bicep 'publicNetworkAccess: Enabled'
+  # setting post-deployment, so we explicitly enforce it here for local development.
+  COSMOS_PUBLIC_ACCESS=$(az cosmosdb show --name $COSMOS_ACCOUNT_NAME --resource-group $RESOURCE_GROUP --query publicNetworkAccess -o tsv 2>/dev/null || echo "")
+  if [ "$COSMOS_PUBLIC_ACCESS" != "Enabled" ]; then
+    echo "   Enabling Cosmos DB public network access for local development..."
+    DEV_IP=$(curl -s https://api.ipify.org 2>/dev/null || echo "")
+    if [ -n "$DEV_IP" ]; then
+      echo "   Whitelisting developer IP: $DEV_IP"
+      az cosmosdb update \
+        --name $COSMOS_ACCOUNT_NAME \
+        --resource-group $RESOURCE_GROUP \
+        --public-network-access ENABLED \
+        --ip-range-filter "$DEV_IP" \
+        --output none 2>/dev/null || log_warning "Could not update Cosmos DB network settings"
+    else
+      az cosmosdb update \
+        --name $COSMOS_ACCOUNT_NAME \
+        --resource-group $RESOURCE_GROUP \
+        --public-network-access ENABLED \
+        --output none 2>/dev/null || log_warning "Could not update Cosmos DB network settings"
+    fi
+  else
+    # Public access already enabled - ensure developer IP is in the firewall
+    DEV_IP=$(curl -s https://api.ipify.org 2>/dev/null || echo "")
+    if [ -n "$DEV_IP" ]; then
+      EXISTING_IPS=$(az cosmosdb show --name $COSMOS_ACCOUNT_NAME --resource-group $RESOURCE_GROUP --query "ipRules[].ipAddressOrRange" -o tsv 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+      if ! echo "$EXISTING_IPS" | grep -q "$DEV_IP"; then
+        echo "   Adding developer IP $DEV_IP to Cosmos DB firewall..."
+        if [ -n "$EXISTING_IPS" ]; then
+          NEW_IPS="${EXISTING_IPS},${DEV_IP}"
+        else
+          NEW_IPS="$DEV_IP"
+        fi
+        az cosmosdb update \
+          --name $COSMOS_ACCOUNT_NAME \
+          --resource-group $RESOURCE_GROUP \
+          --ip-range-filter "$NEW_IPS" \
+          --output none 2>/dev/null || log_warning "Could not update Cosmos DB firewall"
+      fi
+    fi
+  fi
+
   log_success "User role assignments complete"
 fi
 
