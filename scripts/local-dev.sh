@@ -69,7 +69,7 @@ source venv/bin/activate
 pip install -r requirements.txt -q
 
 echo "   Starting Flask backend on http://localhost:5000..."
-python run.py &
+PYTHONUNBUFFERED=1 python run.py &
 BACKEND_PID=$!
 cd "$PROJECT_DIR"
 

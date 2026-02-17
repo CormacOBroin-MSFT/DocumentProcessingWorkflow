@@ -1,10 +1,10 @@
 {
-  "DocumentConsistencyAgent": "DocumentConsistencyAgent:1",
-  "HSCodeValidationAgent": "HSCodeValidationAgent:1",
-  "CountryRestrictionsAgent": "CountryRestrictionsAgent:1",
-  "CountryOfOriginAgent": "CountryOfOriginAgent:1",
-  "ControlledGoodsAgent": "ControlledGoodsAgent:1",
-  "ValueReasonablenessAgent": "ValueReasonablenessAgent:1",
-  "ShipperVerificationAgent": "ShipperVerificationAgent:2",
-  "ComplianceAggregatorAgent": "ComplianceAggregatorAgent:1"
+  "DocumentConsistencyAgent": "DocumentConsistencyAgent",
+  "HSCodeValidationAgent": "HSCodeValidationAgent",
+  "CountryRestrictionsAgent": "CountryRestrictionsAgent",
+  "CountryOfOriginAgent": "CountryOfOriginAgent",
+  "ControlledGoodsAgent": "ControlledGoodsAgent",
+  "ValueReasonablenessAgent": "ValueReasonablenessAgent",
+  "ShipperVerificationAgent": "ShipperVerificationAgent",
+  "ComplianceAggregatorAgent": "ComplianceAggregatorAgent"
 }

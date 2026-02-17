@@ -12,7 +12,7 @@ metadata:
     - shipper
     - verification
 model:
-  id: 'gpt-41'
+  id: 'gpt-41-mini'
   options:
     temperature: 0.1
     top_p: 1

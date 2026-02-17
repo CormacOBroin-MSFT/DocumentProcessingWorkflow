@@ -7,8 +7,18 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 setup_analyzer() {
     local ENDPOINT="${1:-$AZURE_CONTENT_UNDERSTANDING_ENDPOINT}"
-    local ANALYZER_ID="customsDeclaration"
+    local ANALYZER_ID="${AZURE_CONTENT_UNDERSTANDING_ANALYZER_ID:-customsDeclaration}"
     local API_VERSION="2025-11-01"
+    local GPT41_DEPLOYMENT="${AZURE_CONTENT_UNDERSTANDING_GPT41_DEPLOYMENT:-${AZURE_OPENAI_DEPLOYMENT:-gpt-4.1}}"
+    local GPT41_MINI_DEPLOYMENT="${AZURE_CONTENT_UNDERSTANDING_GPT41_MINI_DEPLOYMENT:-}"
+
+    if [ -z "$GPT41_MINI_DEPLOYMENT" ]; then
+        if [[ "$GPT41_DEPLOYMENT" == *"gpt-41"* ]]; then
+            GPT41_MINI_DEPLOYMENT="gpt-41-mini"
+        else
+            GPT41_MINI_DEPLOYMENT="gpt-4.1-mini"
+        fi
+    fi
     
     if [ -z "$ENDPOINT" ]; then
         echo "❌ AZURE_CONTENT_UNDERSTANDING_ENDPOINT not set"
@@ -20,6 +30,7 @@ setup_analyzer() {
     echo "📋 Setting up Content Understanding analyzer..."
     echo "   Endpoint: $ENDPOINT"
     echo "   Analyzer: $ANALYZER_ID"
+    echo "   Model deploys: gpt-4.1->$GPT41_DEPLOYMENT, gpt-4.1-mini->$GPT41_MINI_DEPLOYMENT"
     
     # Get access token
     ACCESS_TOKEN=$(az account get-access-token --resource https://cognitiveservices.azure.com --query accessToken -o tsv)
@@ -43,7 +54,7 @@ setup_analyzer() {
             -X PATCH "${ENDPOINT}/contentunderstanding/defaults?api-version=${API_VERSION}" \
             -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -H "Content-Type: application/merge-patch+json" \
-            -d '{"modelDeployments": {"gpt-4.1": "gpt-41", "gpt-4.1-mini": "gpt-41-mini", "text-embedding-3-large": "text-embedding-3-large"}}')
+            -d "{\"modelDeployments\": {\"gpt-4.1\": \"${GPT41_DEPLOYMENT}\", \"gpt-4.1-mini\": \"${GPT41_MINI_DEPLOYMENT}\", \"text-embedding-3-large\": \"text-embedding-3-large\"}}")
         
         DEFAULTS_STATUS=$(echo "$DEFAULTS_RESPONSE" | tail -n 1)
         if [ "$DEFAULTS_STATUS" = "200" ] || [ "$DEFAULTS_STATUS" = "201" ]; then

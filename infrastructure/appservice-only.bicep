@@ -41,8 +41,8 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: '${baseName}-kv'
 }
 
-// Get GPT-4.1 deployment name (should be 'gpt-41')
-var gptDeploymentName = 'gpt-41'
+// Get GPT-4.1 deployment name
+var gptDeploymentName = 'gpt-4.1'
 
 // ============================================================================
 // NEW: App Service Plan and App Service

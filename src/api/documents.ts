@@ -77,6 +77,7 @@ const ComplianceResponseSchema = z.object({
         severity: z.string().optional(),
         source_agent: z.string().optional(),
     })).optional(),
+    normalized_structured_data: z.record(z.string(), z.string()).optional(),
 })
 
 // ----- API Functions -----
@@ -172,9 +173,16 @@ export async function analyzeDocument(blobUrl: string): Promise<{
     }
     console.log('OCR API parsed result:', result)
 
-    // Check if structured data was extracted
-    const hasStructuredData = result.structured_data &&
-        Object.values(result.structured_data).some((field: any) => field?.value)
+    const extractedCount = result.fields_extracted || 0
+    const structured = result.structured_data || {}
+    const nonEmpty = Object.entries(structured).filter(([, field]: any) => field?.value && String(field.value).trim())
+    const nonEmptyKeys = new Set(nonEmpty.map(([key]) => key))
+    const coreKeys = ['shipper', 'receiver', 'goodsDescription', 'value']
+    const corePresent = coreKeys.filter((key) => nonEmptyKeys.has(key)).length
+
+    // Follow original strategy: only trust direct structured output when sufficiently complete.
+    // Otherwise let transform stage shape the declaration from raw_data.
+    const hasStructuredData = extractedCount >= 4 && corePresent >= 2
 
     return {
         rawData: (result.raw_data || {}) as Record<string, { value: string; confidence: number }>,
@@ -240,7 +248,14 @@ export type ComplianceFinding = {
 }
 
 // Perform compliance validation
-export async function performComplianceCheck(data: CustomsDeclaration): Promise<{
+export async function performComplianceCheck(
+    data: CustomsDeclaration,
+    ocrResult?: {
+        rawData?: Record<string, { value: string; confidence: number }>
+        structuredDataWithConfidence?: Record<string, { value: string; confidence: number }> | null
+        ocrConfidence?: number
+    },
+): Promise<{
     checks: boolean[]
     complianceConfidence: number
     issueDescriptions: string[]
@@ -248,11 +263,19 @@ export async function performComplianceCheck(data: CustomsDeclaration): Promise<
     requiresManualReview: boolean
     recommendations: string[]
     findings: ComplianceFinding[]
+    normalizedStructuredData?: CustomsDeclaration
 }> {
     const response = await fetch(`${API_CONFIG.BASE_URL}/api/compliance/validate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ structured_data: data }),
+        body: JSON.stringify({
+            structured_data: data,
+            ocr_result: ocrResult ? {
+                raw_data: ocrResult.rawData,
+                structured_data_with_confidence: ocrResult.structuredDataWithConfidence,
+                ocr_confidence: ocrResult.ocrConfidence,
+            } : undefined,
+        }),
     })
 
     if (!response.ok) {
@@ -269,6 +292,17 @@ export async function performComplianceCheck(data: CustomsDeclaration): Promise<
         requiresManualReview: result.requires_manual_review || false,
         recommendations: result.recommendations || [],
         findings: result.findings || [],
+        normalizedStructuredData: result.normalized_structured_data
+            ? {
+                shipper: result.normalized_structured_data.shipper || data.shipper,
+                receiver: result.normalized_structured_data.receiver || data.receiver,
+                goodsDescription: result.normalized_structured_data.goodsDescription || data.goodsDescription,
+                value: result.normalized_structured_data.value || data.value,
+                countryOfOrigin: result.normalized_structured_data.countryOfOrigin || data.countryOfOrigin,
+                hsCode: result.normalized_structured_data.hsCode || data.hsCode,
+                weight: result.normalized_structured_data.weight || data.weight,
+            }
+            : undefined,
     }
 }
 
