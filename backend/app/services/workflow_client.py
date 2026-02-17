@@ -152,7 +152,8 @@ class WorkflowClient:
                         extra_body={
                             "agent": {
                                 "name": workflow_config["name"],
-                                "type": "agent_reference"
+                                "type": "agent_reference",
+                                "version": "18"
                             }
                         },
                         input=input_message,

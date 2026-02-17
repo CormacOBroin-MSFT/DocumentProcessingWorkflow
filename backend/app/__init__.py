@@ -69,7 +69,7 @@ def setup_logging():
     return app_logger
 
 def create_app():
-    load_dotenv()
+    load_dotenv(override=True)
     
     # Configure logging for production (works with Gunicorn)
     logger = setup_logging()

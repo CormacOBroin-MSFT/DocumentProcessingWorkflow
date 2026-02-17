@@ -788,7 +788,7 @@ fi
 log_step "Deploying workflow YAML to Azure AI Foundry..."
 WORKFLOW_YAML="$PROJECT_DIR/agents/compliance-workflow.yaml"
 if [ -f "$WORKFLOW_YAML" ]; then
-    WORKFLOW_TOKEN=$(az account get-access-token --resource https://cognitiveservices.azure.com --query accessToken -o tsv)
+    WORKFLOW_TOKEN=$(az account get-access-token --resource https://ai.azure.com --query accessToken -o tsv)
     WORKFLOW_CONTENT=$(cat "$WORKFLOW_YAML")
     
     # Deploy via the agents API - create_version for the workflow agent
