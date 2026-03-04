@@ -1,245 +1,178 @@
 """
 Azure AI Content Understanding Service
-Handles document analysis using Azure AI Content Understanding with custom analyzer
-Extracts structured customs declaration fields using a defined schema
+Analyzes customs declaration documents using a custom Content Understanding analyzer.
+
+The custom analyzer extracts 7 customs fields directly from the document.
+Set AZURE_CONTENT_UNDERSTANDING_ANALYZER_ID in .env (created by setup-azure.sh).
 """
 import logging
-import requests
-import time
-from typing import Dict, Optional, Any
+import os
+from typing import Any, Dict, Optional
+
 from azure.identity import DefaultAzureCredential
 from app.config import config
+from app.services.content_understanding_client import ContentUnderstandingClient
 
-logger = logging.getLogger('autonomousflow.content_understanding')
+logger = logging.getLogger("autonomousflow.content_understanding")
 
-# Analyzer ID for customs declarations (created via setup-analyzer.sh)
-CUSTOMS_ANALYZER_ID = "customsDeclaration"
+ANALYZER_ID = os.getenv("AZURE_CONTENT_UNDERSTANDING_ANALYZER_ID")
+if not ANALYZER_ID:
+    raise ValueError(
+        "AZURE_CONTENT_UNDERSTANDING_ANALYZER_ID is not set. "
+        "Run ./scripts/setup-azure.sh to create the custom analyzer and generate backend/.env."
+    )
 
-# Expected fields from our customs analyzer schema
-CUSTOMS_FIELDS = ['shipper', 'receiver', 'goodsDescription', 'value', 'countryOfOrigin', 'hsCode', 'weight']
+# Our target customs fields
+CUSTOMS_FIELDS = ["shipper", "receiver", "goodsDescription", "value", "countryOfOrigin", "hsCode", "weight"]
+
+
+def _token_provider() -> str:
+    """Get a bearer token using Azure CLI credentials."""
+    credential = DefaultAzureCredential(
+        exclude_managed_identity_credential=True,
+        exclude_shared_token_cache_credential=True,
+    )
+    return credential.get_token("https://cognitiveservices.azure.com/.default").token
+
+
+def _build_client() -> ContentUnderstandingClient:
+    """Build a ContentUnderstandingClient from environment config."""
+    endpoint = config.AZURE_CONTENT_UNDERSTANDING_ENDPOINT
+    if not endpoint:
+        raise ValueError("AZURE_CONTENT_UNDERSTANDING_ENDPOINT not configured")
+
+    key = config.AZURE_CONTENT_UNDERSTANDING_KEY
+    return ContentUnderstandingClient(
+        endpoint=endpoint,
+        subscription_key=key if key else None,
+        token_provider=_token_provider if not key else None,
+    )
 
 
 class AzureContentUnderstandingService:
-    """Service for document analysis using Azure AI Content Understanding"""
-    
+    """Service for document analysis using Azure AI Content Understanding."""
+
     def __init__(self):
-        if not config.AZURE_CONTENT_UNDERSTANDING_ENDPOINT:
-            raise ValueError("Azure Content Understanding endpoint not configured")
-        
-        self.endpoint = config.AZURE_CONTENT_UNDERSTANDING_ENDPOINT.rstrip('/')
-        self.api_version = "2025-11-01"
-        
-        # Use DefaultAzureCredential for local dev (uses Azure CLI login)
-        # Falls back to key-based auth if key is provided
-        if config.AZURE_CONTENT_UNDERSTANDING_KEY:
-            self.api_key = config.AZURE_CONTENT_UNDERSTANDING_KEY
-            self.use_api_key = True
-        else:
-            self.credential = DefaultAzureCredential()
-            self.use_api_key = False
-    
-    def _get_headers(self) -> Dict[str, str]:
-        """Get authentication headers"""
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
-        
-        if self.use_api_key:
-            headers['Ocp-Apim-Subscription-Key'] = self.api_key
-        else:
-            token = self.credential.get_token("https://cognitiveservices.azure.com/.default")
-            headers['Authorization'] = f'Bearer {token.token}'
-            
-        return headers
-    
+        self.client = _build_client()
+
     def analyze_document(self, blob_url: str) -> Dict[str, Any]:
         """
-        Analyze a document using the customs declaration analyzer
-        
-        Args:
-            blob_url: URL of the document to analyze (must be accessible)
-            
-        Returns:
-            Dict with structured_data (customs fields with confidence) and overall confidence
-        """
-        try:
-            # Submit document for analysis using our custom analyzer
-            analyze_url = f"{self.endpoint}/contentunderstanding/analyzers/{CUSTOMS_ANALYZER_ID}:analyze"
-            
-            payload = {
-                "inputs": [
-                    {"url": blob_url}
-                ]
-            }
-            
-            headers = self._get_headers()
-            
-            # Start analysis
-            response = requests.post(
-                analyze_url,
-                json=payload,
-                headers=headers,
-                params={'api-version': self.api_version}
-            )
-            
-            if response.status_code == 202:
-                # Get result ID from response body
-                result = response.json()
-                result_id = result.get('id')
-                
-                if not result_id:
-                    raise ValueError("No result ID returned from Content Understanding")
-                
-                return self._poll_for_results(result_id)
-            else:
-                error_detail = response.text
-                logger.error(f"Content Understanding API error: {response.status_code} - {error_detail}")
-                raise ValueError(f"Content Understanding API error: {response.status_code}")
-                
-        except Exception as e:
-            logger.error(f"Content Understanding analysis failed: {e}")
-            raise ValueError(f"Content Understanding API error: {e}")
-    
-    def _poll_for_results(self, result_id: str, max_attempts: int = 60) -> Dict[str, Any]:
-        """Poll for analysis results"""
-        headers = self._get_headers()
-        result_url = f"{self.endpoint}/contentunderstanding/analyzerResults/{result_id}"
-        
-        for attempt in range(max_attempts):
-            try:
-                response = requests.get(
-                    result_url,
-                    headers=headers,
-                    params={'api-version': self.api_version}
-                )
-                response.raise_for_status()
-                result = response.json()
-                
-                status = result.get('status', '').lower()
-                
-                if status == 'succeeded':
-                    return self._extract_customs_fields(result)
-                elif status == 'failed':
-                    error_msg = result.get('error', {}).get('message', 'Unknown error')
-                    raise Exception(f"Content Understanding analysis failed: {error_msg}")
-                
-                # Still running, wait and retry
-                if attempt < max_attempts - 1:
-                    time.sleep(2)
-                    
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Error polling results (attempt {attempt + 1}): {e}")
-                if attempt == max_attempts - 1:
-                    raise
-        
-        raise Exception("Content Understanding analysis timed out")
-    
-    def _extract_customs_fields(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Extract customs fields from Content Understanding results
-        
-        The analyzer returns fields directly based on our schema definition
-        """
-        try:
-            # Get the first content result
-            contents = result.get('result', {}).get('contents', [])
-            
-            if not contents:
-                raise ValueError("No content returned from analysis")
-            
-            content = contents[0]
-            fields = content.get('fields', {})
-            
-            # Log the raw fields for debugging
-            logger.info("=== Content Understanding Raw Response ===")
-            logger.info(f"Fields received: {list(fields.keys())}")
-            for field_name, field_data in fields.items():
-                logger.info(f"  {field_name}: {field_data}")
-            
-            # Also log the markdown content to see what was extracted
-            markdown = content.get('markdown', '')
-            if markdown:
-                logger.info(f"Markdown content (first 1000 chars):\n{markdown[:1000]}")
-            
-            # Log tables if present
-            tables = content.get('tables', [])
-            if tables:
-                logger.info(f"Tables found: {len(tables)}")
-                for i, table in enumerate(tables[:2]):  # Log first 2 tables
-                    logger.info(f"  Table {i}: {table}")
-            
-            # Build structured data from extracted fields
-            structured_data: Dict[str, Dict[str, Any]] = {}
-            confidences = []
-            extracted_field_count = 0
-            
-            for field_name in CUSTOMS_FIELDS:
-                field_data = fields.get(field_name, {})
-                
-                # Extract value based on field type
-                value = ''
-                if field_data.get('type') == 'string':
-                    value = field_data.get('valueString', '')
-                elif field_data.get('type') == 'number':
-                    value = str(field_data.get('valueNumber', ''))
-                elif 'value' in field_data:
-                    value = str(field_data.get('value', ''))
-                
-                confidence = field_data.get('confidence', 0.0)
-                
-                structured_data[field_name] = {
-                    'value': value,
-                    'confidence': confidence
-                }
-                
-                if value and value.strip():
-                    extracted_field_count += 1
-                    if confidence > 0:
-                        confidences.append(confidence)
-            
-            # Check if any fields were extracted
-            if extracted_field_count == 0:
-                logger.warning("No fields were extracted from the document. The document may not be a valid customs declaration or may be unreadable.")
-            
-            # Calculate overall confidence
-            overall_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-            
-            # Also collect raw key-value pairs for debugging/display
-            raw_data = {}
-            key_value_pairs = content.get('keyValuePairs', [])
-            for kv in key_value_pairs:
-                key = kv.get('key', {}).get('content', '')
-                value = kv.get('value', {}).get('content', '')
-                conf = kv.get('confidence', 0.8)
-                if key and value:
-                    raw_data[key] = {'value': value, 'confidence': conf}
-            
-            # Build extraction result with warning if no fields were extracted
-            result = {
-                'structured_data': structured_data,
-                'raw_data': raw_data,
-                'ocr_confidence': overall_confidence,
-                'fields_extracted': extracted_field_count,
-                'total_fields': len(CUSTOMS_FIELDS)
-            }
-            
-            if extracted_field_count == 0:
-                result['extraction_warning'] = 'No customs declaration fields could be extracted from this document. Please ensure you are uploading a valid customs declaration or commercial invoice.'
-            elif extracted_field_count < len(CUSTOMS_FIELDS) // 2:
-                result['extraction_warning'] = f'Only {extracted_field_count} of {len(CUSTOMS_FIELDS)} fields were extracted. Some information may need to be entered manually.'
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error extracting customs fields: {e}")
-            raise
+        Analyze a document and extract customs declaration fields.
 
+        Args:
+            blob_url: URL of the document in Azure Blob Storage (CU accesses via managed identity).
+
+        Returns:
+            Dict with structured_data, raw_data, ocr_confidence, fields_extracted, total_fields.
+        """
+        logger.info(f"Analyzing document with analyzer '{ANALYZER_ID}'")
+
+        # 1. Submit for analysis
+        response = self.client.begin_analyze(ANALYZER_ID, blob_url)
+
+        # 2. Poll until complete
+        result = self.client.poll_result(response)
+
+        # 3. Extract and map fields
+        contents = result.get("result", {}).get("contents", [])
+        if not contents:
+            raise ValueError("No content returned from Content Understanding")
+
+        content = contents[0]
+        fields = content.get("fields", {})
+        logger.info(f"Fields returned: {list(fields.keys())}")
+
+        return self._map_custom_fields(fields, content)
+
+    # ── Custom analyzer field mapping (direct) ─────────────────
+
+    def _map_custom_fields(self, fields: Dict[str, Any], content: Dict) -> Dict[str, Any]:
+        """Map custom analyzer fields (1:1 with our schema)."""
+        field_map = {}
+        for name in CUSTOMS_FIELDS:
+            field = fields.get(name, {})
+            field_map[name] = (self._read_field_value(field), self._confidence(field))
+        return self._build_result(field_map, content)
+
+    # ── Shared result builder ─────────────────────────────────────
+
+    def _build_result(self, field_map: Dict[str, tuple], content: Dict) -> Dict[str, Any]:
+        """Build the standard result dict from a field_map of {name: (value, confidence)}."""
+        structured_data = {}
+        raw_data = {}
+        confidences = []
+        extracted_count = 0
+
+        for name in CUSTOMS_FIELDS:
+            value, confidence = field_map.get(name, ("", 0.0))
+            structured_data[name] = {"value": value, "confidence": confidence}
+            if value.strip():
+                extracted_count += 1
+                if confidence > 0:
+                    confidences.append(confidence)
+                raw_data[name] = {"value": value, "confidence": confidence}
+
+        # Also grab any key-value pairs from the document
+        for kv in content.get("keyValuePairs", []):
+            key = kv.get("key", {}).get("content", "")
+            val = kv.get("value", {}).get("content", "")
+            if key and val:
+                raw_data[key] = {"value": val, "confidence": kv.get("confidence", 0.8)}
+
+        overall = sum(confidences) / len(confidences) if confidences else 0.0
+
+        result_data = {
+            "structured_data": structured_data,
+            "raw_data": raw_data,
+            "ocr_confidence": overall,
+            "fields_extracted": extracted_count,
+            "total_fields": len(CUSTOMS_FIELDS),
+        }
+
+        if extracted_count == 0:
+            result_data["extraction_warning"] = (
+                "Document analyzed but no customs fields identified. "
+                "You can continue and enter values manually."
+            )
+        elif extracted_count < len(CUSTOMS_FIELDS) // 2:
+            result_data["extraction_warning"] = (
+                f"Only {extracted_count}/{len(CUSTOMS_FIELDS)} fields extracted. "
+                "Some information may need manual entry."
+            )
+
+        return result_data
+
+    # ── Field value readers ───────────────────────────────────────
+
+    @staticmethod
+    def _read_field_value(field: Optional[Dict]) -> str:
+        """Read value from any typed CU field."""
+        if not field:
+            return ""
+        t = field.get("type", "")
+        if t == "string":
+            return field.get("valueString", "")
+        if t == "number":
+            n = field.get("valueNumber")
+            return str(n) if n is not None else ""
+        if t == "date":
+            return field.get("valueDate", "")
+        # Generic fallbacks
+        for key in ("value", "content"):
+            if key in field:
+                return str(field[key])
+        return ""
+
+    @staticmethod
+    def _confidence(field: Optional[Dict]) -> float:
+        if not field:
+            return 0.0
+        return field.get("confidence", 0.0)
 
 def get_content_understanding_service() -> Optional[AzureContentUnderstandingService]:
-    """Factory function to get Content Understanding service instance"""
+    """Factory function to get Content Understanding service instance."""
     try:
         return AzureContentUnderstandingService()
     except Exception as e:
-        logger.error(f"Could not initialize Azure Content Understanding Service: {e}")
+        logger.error(f"Could not initialize Content Understanding service: {e}")
         return None

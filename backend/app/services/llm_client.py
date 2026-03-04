@@ -4,6 +4,7 @@ Handles LLM calls for data transformation and compliance checking via Azure AI F
 """
 import json
 import logging
+import re
 from typing import Dict, List, Optional
 from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
@@ -103,6 +104,16 @@ Return ONLY valid JSON.
             )
             
             result = json.loads(response.choices[0].message.content)
+
+            required_fields = [
+                "shipper",
+                "receiver",
+                "goodsDescription",
+                "value",
+                "countryOfOrigin",
+                "hsCode",
+                "weight",
+            ]
             
             # Ensure proper structure with per-field confidence
             if "structured_data" not in result:
@@ -129,6 +140,22 @@ Return ONLY valid JSON.
                         field_data["value"] = str(field_data.get(list(field_data.keys())[0], ""))
                     if "confidence" not in field_data:
                         field_data["confidence"] = 0.5
+
+            for field_name in required_fields:
+                if field_name not in result["structured_data"]:
+                    result["structured_data"][field_name] = {
+                        "value": "",
+                        "confidence": 0.0,
+                    }
+
+            current_origin = str(result["structured_data"].get("countryOfOrigin", {}).get("value", "") or "").strip()
+            if not current_origin or current_origin.lower() in {"not specified", "unknown", "n/a", "na"}:
+                inferred_origin = self._infer_country_from_raw_data(raw_data)
+                if inferred_origin:
+                    result["structured_data"]["countryOfOrigin"] = {
+                        "value": inferred_origin,
+                        "confidence": 0.55,
+                    }
             
             structure_confidence = result["structure_confidence"]
             
@@ -137,6 +164,72 @@ Return ONLY valid JSON.
         except Exception as e:
             logger.error(f"Error in LLM transformation: {e}")
             raise
+
+    def _infer_country_from_raw_data(self, raw_data: Dict) -> str:
+        country_map = {
+            "USA": "United States",
+            "US": "United States",
+            "UNITED STATES": "United States",
+            "U.S.A": "United States",
+            "U.S.": "United States",
+            "UK": "United Kingdom",
+            "GB": "United Kingdom",
+            "GREAT BRITAIN": "United Kingdom",
+            "UNITED KINGDOM": "United Kingdom",
+            "CHINA": "China",
+            "CN": "China",
+            "GERMANY": "Germany",
+            "DE": "Germany",
+            "FRANCE": "France",
+            "FR": "France",
+            "JAPAN": "Japan",
+            "JP": "Japan",
+            "INDIA": "India",
+            "IN": "India",
+        }
+
+        combined_values = []
+        for value in raw_data.values() if isinstance(raw_data, dict) else []:
+            if isinstance(value, dict):
+                text = str(value.get("value", "") or "")
+            else:
+                text = str(value or "")
+            if text:
+                combined_values.append(text)
+
+        source_text = "\n".join(combined_values)
+        if not source_text:
+            return ""
+
+        explicit_match = re.search(
+            r"(?:country\s*of\s*origin|origin|made\s*in|manufactured\s*in)\s*[:\-]?\s*([A-Za-z .]{2,40})",
+            source_text,
+            flags=re.IGNORECASE,
+        )
+        if explicit_match:
+            candidate = explicit_match.group(1).strip().upper().replace(".", "")
+            candidate = re.sub(r"\s+", " ", candidate)
+            if candidate in country_map:
+                return country_map[candidate]
+
+        shipper_text = ""
+        for key, value in (raw_data.items() if isinstance(raw_data, dict) else []):
+            if "shipper" in str(key).lower() or "exporter" in str(key).lower() or "sender" in str(key).lower():
+                if isinstance(value, dict):
+                    shipper_text = str(value.get("value", "") or "")
+                else:
+                    shipper_text = str(value or "")
+                break
+
+        search_text = shipper_text or source_text
+        upper_text = search_text.upper().replace(".", " ")
+        upper_text = re.sub(r"\s+", " ", upper_text)
+
+        for token, normalized in country_map.items():
+            if re.search(rf"\b{re.escape(token)}\b", upper_text):
+                return normalized
+
+        return ""
     
     def perform_compliance_check(self, structured_data: Dict) -> Dict:
         """

@@ -1,6 +1,6 @@
 # Autonomous Document Workflow
 
-AI-powered customs document processing workflow using Azure AI services. This application showcases an agentic AI workflow for processing customs declarations with OCR, data transformation, and compliance validation.
+AI-powered customs document processing workflow using Azure AI services. Upload a customs declaration, extract structured data with OCR, then run multi-agent compliance validation — all orchestrated through Azure AI Foundry.
 
 ![Azure](https://img.shields.io/badge/Azure-App%20Service-blue) ![React](https://img.shields.io/badge/React-19-61dafb) ![Flask](https://img.shields.io/badge/Flask-3.0-green) ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)
 
@@ -15,135 +15,160 @@ AI-powered customs document processing workflow using Azure AI services. This ap
 │  └──────────────────┘      └────────┬─────────┘           │
 └─────────────────────────────────────┼──────────────────────┘
                                       │ Managed Identity
-              ┌───────────────────────┼───────────────────────┐
-              ▼                       ▼                       ▼
-       ┌───────────┐          ┌───────────┐           ┌───────────┐
-       │   Blob    │          │  Content  │           │  Azure    │
-       │  Storage  │          │ Understand│           │  OpenAI   │
-       │           │          │ ing       │           │           │
-       └───────────┘          └───────────┘           └───────────┘
+    ┌──────────────┬──────────────────┼──────────────────┬───────────────┐
+    ▼              ▼                  ▼                  ▼               ▼
+┌────────┐  ┌───────────┐   ┌──────────────┐   ┌──────────────┐  ┌──────────┐
+│  Blob  │  │  Content  │   │   Azure AI   │   │   Azure AI   │  │ Cosmos   │
+│Storage │  │Understanding  │   Foundry    │   │    Search   │  │   DB     │
+│        │  │(custom     │   │(7 agents +  │   │(HS codes,  │  │          │
+│        │  │ analyzer)  │   │ workflow)   │   │ sanctions) │  │          │
+└────────┘  └───────────┘   └──────────────┘   └──────────────┘  └──────────┘
 ```
 
-**Single App Service hosts both frontend and backend** - simple, cost-effective, easy to manage.
+### Processing Pipeline
 
-## Features
-
-- 📄 **Document Upload** - Drag & drop document intake
-- ☁️ **Azure Blob Storage** - Secure cloud document storage  
-- 🔍 **OCR Processing** - Azure AI Content Understanding for text extraction
-- 🔄 **Data Transformation** - LLM-powered structuring of extracted data
-- ✅ **Compliance Validation** - Automated customs compliance checks
-- 👤 **Human-in-the-Loop** - Manual review and approval workflow
-- 📊 **Confidence Scoring** - Real-time accuracy metrics at each stage
+1. **Upload** — Document uploaded to Azure Blob Storage (identity-based auth, no SAS tokens)
+2. **OCR + Extraction** — Azure Content Understanding with custom analyzer extracts 7 customs fields
+3. **Transform** — LLM enriches/validates extracted data
+4. **Compliance** — 7 specialist AI agents run sequentially via Azure AI Foundry workflow
+5. **Review** — Human-in-the-loop approval with confidence scoring
+6. **Store** — Approved declaration saved to Cosmos DB
 
 ---
 
-## Local Development
+## Getting Started
 
 ### Prerequisites
 
-- Node.js 20+ (recommend using `nvm install 22`)
-- Python 3.9+
-- Azure account (optional - works with mock data)
+- **Node.js 20+** (recommend `nvm install 22`)
+- **Python 3.12+**
+- **Azure CLI** — `az login` before running anything
+- An Azure subscription
 
-### Quick Start
+### Step 1: Run the Setup Script
 
-**Terminal 1 - Frontend:**
-```bash
-npm install
-npm run dev
-```
-→ http://localhost:5173
-
-**Terminal 2 - Backend:**
-```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-python run.py
-```
-→ http://localhost:5000
-
-### Mock Mode
-
-Without Azure credentials, the app runs in mock mode with sample data - you'll see a yellow warning banner but can demo the full workflow.
-
----
-
-## Azure Deployment
-
-### One-Click Deploy
+The setup script provisions all Azure infrastructure, configures RBAC, indexes reference data, creates agents, and generates your `.env` file.
 
 ```bash
-# 1. Login to Azure
-az login
-
-# 2. Run deployment script
-chmod +x scripts/deploy.sh
-scripts/deploy.sh
+./scripts/setup-azure.sh
 ```
 
-This creates all resources with proper Managed Identity configuration:
-- **App Service Plan** (B1 - ~$13/month)
-- **App Service** (Linux Python 3.11)
-- **Storage Account** + blob container
-- **Content Understanding** (F0 free tier)
-- **Key Vault** for secrets
+This creates:
+- Azure Storage Account (with Blob container)
+- Azure AI Services (Foundry hub + project, OpenAI model deployments)
+- Azure AI Search (HS code + sanctions indexes)
+- Azure Cosmos DB (NoSQL)
+- Bing Grounding resource + connection
+- Content Understanding custom analyzer
+- All 7 specialist compliance agents in Foundry
+- `backend/.env` with all endpoints pre-configured
 
-### Post-Deployment: Add OpenAI Key
+> **Note:** The script is idempotent — safe to re-run. It skips resources that already exist.
+
+### Step 2: Create the Compliance Workflow in Foundry (Manual)
+
+The setup script creates all 8 agents but the **workflow** must be pasted manually in the Foundry portal.
+
+1. Go to [Azure AI Foundry](https://ai.azure.com) → your project → **Agents**.
+2. Click **+ New agent** → choose **Workflow**.
+3. Set the **Name** to exactly: `customs-compliance-workflow`
+4. Switch to the **YAML editor**.
+5. Paste the entire contents of [`agents/compliance-workflow.yaml`](agents/compliance-workflow.yaml).
+6. **Save** the workflow.
+
+> The workflow references each agent by name (e.g. `DocumentConsistencyAgent`). All 8 agents from Step 1 must exist before the workflow will run.
+
+### Step 3: Verify the Content Understanding Analyzer (If Needed)
+
+The setup script attempts to create a custom CU analyzer via the API. If it succeeded, you're done — skip this step.
+
+If the script logged a warning about analyzer creation, create it manually:
+
+1. Go to [Content Understanding Studio](https://ai.azure.com/contentunderstanding) and sign in.
+2. Select the Content Understanding resource created by the script (endpoint is in `backend/.env`).
+3. **Create a new project** with kind **Extract**.
+4. **Add these 7 fields:**
+
+   | Field Name         | Type   | Method  | Description                        |
+   |--------------------|--------|---------|------------------------------------|
+   | `shipper`          | string | extract | Shipper / exporter name            |
+   | `receiver`         | string | extract | Receiver / importer name           |
+   | `goodsDescription` | string | extract | Description of goods               |
+   | `value`            | string | extract | Total declared value               |
+   | `countryOfOrigin`  | string | extract | Country of origin (ISO or name)    |
+   | `hsCode`           | string | extract | Harmonized System code             |
+   | `weight`           | string | extract | Weight / quantity                   |
+
+5. **Deploy** the analyzer and update `AZURE_CONTENT_UNDERSTANDING_ANALYZER_ID` in `backend/.env` with the analyzer name.
+
+> The field schema is also in [`infrastructure/customs-analyzer.json`](infrastructure/customs-analyzer.json) for reference.
+
+### Step 4: Run Locally
 
 ```bash
-az keyvault secret set \
-  --vault-name autonomousflow-kv \
-  --name OPENAI-API-KEY \
-  --value "sk-your-key-here"
+./scripts/local-dev.sh
 ```
 
-### CI/CD with GitHub Actions
+This starts:
+- **Frontend** → http://localhost:5173
+- **Backend** → http://localhost:5000
 
-Push to `main` branch auto-deploys via GitHub Actions. Setup required secrets:
-
-1. Create a service principal:
-```bash
-az ad sp create-for-rbac --name "autonomousflow-deploy" \
-  --role contributor \
-  --scopes /subscriptions/{subscription-id}/resourceGroups/autonomousflow-rg \
-  --sdk-auth
-```
-
-2. Add the JSON output as `AZURE_CREDENTIALS` secret in GitHub repo settings.
+Open the frontend, upload a sample invoice from [`SampleInvoices/`](SampleInvoices/), and click through the workflow.
 
 ---
 
 ## Project Structure
 
 ```
-AutonomousFlow/
-├── src/                          # React frontend
+DocumentProcessingWorkflow/
+├── src/                          # React frontend (TypeScript)
 │   ├── App.tsx                   # Main application
-│   ├── components/ui/            # UI components
-│   └── lib/                      # Utilities
-├── backend/                      # Flask backend
+│   ├── components/               # UI components
+│   ├── hooks/                    # Custom React hooks
+│   └── api/                      # Backend API client
+├── backend/                      # Flask backend (Python)
 │   ├── app/
-│   │   ├── __init__.py          # App factory (serves static + API)
 │   │   ├── routes/              # API endpoints
 │   │   └── services/            # Azure service clients
+│   ├── .env.example             # Sample environment variables
 │   └── run.py                   # Entry point
+├── agents/                       # AI Foundry compliance agents
+│   ├── compliance-workflow.yaml # Declarative workflow YAML (paste into Foundry)
+│   ├── workflow.py              # Agent management CLI
+│   ├── tools.py                 # Agent tool definitions
+│   └── *.yaml                   # Individual agent definitions
 ├── infrastructure/               # Azure IaC
-│   └── app-service.bicep        # Bicep template
+│   ├── customs-analyzer.json    # CU analyzer field schema reference
+│   └── local-dev.bicep          # Bicep template
 ├── scripts/                      # Shell scripts
-│   ├── deploy.sh                # One-click deploy script
-│   ├── setup-azure.sh           # Azure resource setup
-│   ├── local-dev.sh             # Local development script
-│   ├── cleanup-azure.sh         # Cleanup Azure resources
-│   ├── setup-analyzer.sh        # Content Understanding analyzer setup
-│   └── update-analyzer.sh       # Update analyzer
-├── .github/workflows/            # CI/CD
-│   └── deploy.yml               # GitHub Actions
+│   ├── setup-azure.sh           # Full Azure provisioning (run first)
+│   ├── local-dev.sh             # Start frontend + backend
+│   ├── deploy.sh                # App Service deployment
+│   └── cleanup-azure.sh         # Teardown all resources
+├── StaticDataForAgents/          # Reference data (HS codes, sanctions CSVs)
+├── SampleInvoices/               # Test documents
 ├── Dockerfile                    # Container build
 └── README.md
 ```
+
+---
+
+## Compliance Agents
+
+The workflow runs 7 specialist agents sequentially, then an aggregator combines their findings:
+
+| Agent | Purpose | Tools |
+|-------|---------|-------|
+| `DocumentConsistencyAgent` | Cross-checks field consistency | — |
+| `HSCodeValidationAgent` | Validates HS codes against UK tariff | Azure AI Search (`hs-codes`) |
+| `CountryRestrictionsAgent` | Checks sanctions/embargoes | Azure AI Search (`sanctions`) |
+| `CountryOfOriginAgent` | Validates origin country plausibility | — |
+| `ControlledGoodsAgent` | Screens for dual-use/controlled items | — |
+| `ValueReasonablenessAgent` | Checks declared value reasonableness | — |
+| `ShipperVerificationAgent` | Verifies shipper identity | AI Search + Bing Grounding |
+| `ComplianceAggregatorAgent` | Combines all findings into ComplianceReport | — |
+
+Agent definitions are in [`agents/*.yaml`](agents/). The orchestration workflow is in [`agents/compliance-workflow.yaml`](agents/compliance-workflow.yaml).
 
 ---
 
@@ -152,90 +177,60 @@ AutonomousFlow/
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/api/documents/upload` | POST | Upload document |
-| `/api/storage/upload` | POST | Store in Azure Blob |
-| `/api/ocr/analyze` | POST | Run Content Understanding OCR |
-| `/api/transform/structure` | POST | LLM data transformation |
-| `/api/compliance/validate` | POST | LLM compliance validation |
-| `/api/customs/submit` | POST | Submit to customs (mock) |
+| `/api/upload` | POST | Upload document to Azure Blob Storage |
+| `/api/ocr/analyze` | POST | Extract fields via Content Understanding |
+| `/api/transform/structure` | POST | LLM data transformation + enrichment |
+| `/api/compliance/validate` | POST | Multi-agent compliance validation |
+| `/api/cosmosdb/declarations` | GET/POST | Cosmos DB declaration CRUD |
 
 ---
 
 ## Environment Variables
 
-### Local Development (`backend/.env`)
+Generated automatically by `./scripts/setup-azure.sh` into `backend/.env`. All Azure services use `DefaultAzureCredential` — no API keys in code.
 
-```env
-# Azure Storage
-AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;...
-AZURE_STORAGE_CONTAINER=customs-documents
-
-# Azure Content Understanding
-AZURE_CONTENT_UNDERSTANDING_ENDPOINT=https://xxx.cognitiveservices.azure.com/
-# AZURE_CONTENT_UNDERSTANDING_KEY=xxx  (optional - uses DefaultAzureCredential)
-
-# Azure OpenAI
-AZURE_OPENAI_ENDPOINT=https://xxx.openai.azure.com/
-AZURE_OPENAI_KEY=xxx
-AZURE_OPENAI_DEPLOYMENT=gpt-4o
-
-# Flask
-FLASK_ENV=development
-FLASK_DEBUG=True
-```
-
-### Production (App Service)
-
-Set automatically by Bicep deployment - uses Managed Identity (no keys in code):
+Key variables:
 
 | Variable | Description |
 |----------|-------------|
-| `AZURE_STORAGE_ACCOUNT_NAME` | Storage account name |
-| `AZURE_STORAGE_CONTAINER` | Blob container name |
-| `AZURE_CONTENT_UNDERSTANDING_ENDPOINT` | Content Understanding URL |
-| `AZURE_KEY_VAULT_URL` | Key Vault URL (for OpenAI key) |
+| `AZURE_STORAGE_CONNECTION_STRING` | Storage account connection string |
+| `AZURE_CONTENT_UNDERSTANDING_ENDPOINT` | CU resource endpoint |
+| `AZURE_CONTENT_UNDERSTANDING_ANALYZER_ID` | Custom analyzer name (e.g. `customsDeclaration`) |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint |
+| `AZURE_OPENAI_DEPLOYMENT` | Model deployment name (e.g. `gpt-4.1`) |
+| `AZURE_AI_PROJECT_ENDPOINT` | Foundry project endpoint (for workflow) |
+| `AZURE_COSMOS_ENDPOINT` | Cosmos DB endpoint |
+
+See `backend/.env.example` for the full list.
 
 ---
 
-## Estimated Azure Costs
+## Security
 
-| Resource | SKU | ~Monthly Cost |
-|----------|-----|---------------|
-| App Service Plan | B1 | $13 |
-| Storage Account | Standard LRS | $1 |
-| Content Understanding | F0 (free) → S0 | $0 → $1.50/1K pages |
-| Key Vault | Standard | ~$0.03/10K ops |
-| **Total** | | **~$15/month** |
-
-*Azure OpenAI billed separately based on token usage*
-
----
-
-## Security Best Practices
-
-- ✅ **Managed Identity** - No credentials in code or config
-- ✅ **Key Vault** - Secure storage for external API keys
-- ✅ **HTTPS Only** - TLS enforced on App Service
-- ✅ **RBAC** - Least-privilege access to Azure resources
-- ✅ **No public blob access** - Storage account locked down
+- **Managed Identity / DefaultAzureCredential** — No API keys in code or config
+- **No SAS tokens** — Blob access via RBAC role assignments
+- **HTTPS only** — TLS enforced on App Service
+- **RBAC** — Least-privilege access to all Azure resources
 
 ---
 
 ## Troubleshooting
 
-### View App Service Logs
-```bash
-az webapp log tail --name autonomousflow-app --resource-group autonomousflow-rg
-```
+### Content Understanding returns `ContentSourceNotAccessible`
+The CU resource's managed identity needs `Storage Blob Data Reader` on the storage account. The setup script assigns this, but RBAC can take 5–10 minutes to propagate.
 
-### SSH into App Service
-```bash
-az webapp ssh --name autonomousflow-app --resource-group autonomousflow-rg
-```
+### Compliance check fails with "AZURE_AI_PROJECT_ENDPOINT not set"
+Re-run `./scripts/setup-azure.sh` — it adds the endpoint to `backend/.env`.
 
-### Restart App Service
+### Backend can't authenticate to Azure services
+Run `az login` and ensure your account has the required roles (the setup script assigns them).
+
+### Storage uploads fail
+Azure Policy can re-disable public network access on storage accounts. Re-run `./scripts/setup-azure.sh` to restore it.
+
+### View App Service Logs (production)
 ```bash
-az webapp restart --name autonomousflow-app --resource-group autonomousflow-rg
+az webapp log tail --name <app-name> --resource-group <rg-name>
 ```
 
 ---

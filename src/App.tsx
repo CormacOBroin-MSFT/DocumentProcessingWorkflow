@@ -243,8 +243,13 @@ function App() {
           toast.warning(extractionWarning, { duration: 8000 })
         }
 
-        const hasStructuredData =
-          structuredData && Object.values(structuredData).some((field) => field?.value)
+        const hasStructuredData = Boolean(
+          structuredData &&
+          ['shipper', 'receiver', 'goodsDescription', 'value', 'countryOfOrigin'].every((key) => {
+            const value = (structuredData as Record<string, { value?: string }>)[key]?.value
+            return Boolean(String(value || '').trim())
+          })
+        )
         if (structuredData) {
           setRawDataWithConfidence(structuredData)
         }
@@ -305,7 +310,11 @@ function App() {
           riskLevel,
           requiresManualReview,
           recommendations,
-        } = await performComplianceCheck(finalStructuredData)
+        } = await performComplianceCheck(finalStructuredData, {
+          rawData: rawData,
+          structuredDataWithConfidence: structuredData,
+          ocrConfidence,
+        })
         setComplianceChecks(checks)
         setComplianceDescriptions(issueDescriptions)
         setComplianceRiskLevel(riskLevel)
@@ -479,8 +488,13 @@ function App() {
           setShowScanLine(false)
           setShowRawData(true)
 
-          const hasStructuredData =
-            structuredData && Object.values(structuredData).some((field) => field?.value)
+          const hasStructuredData = Boolean(
+            structuredData &&
+            ['shipper', 'receiver', 'goodsDescription', 'value', 'countryOfOrigin'].every((key) => {
+              const value = (structuredData as Record<string, { value?: string }>)[key]?.value
+              return Boolean(String(value || '').trim())
+            })
+          )
 
           if (structuredData) {
             setRawDataWithConfidence(structuredData)
@@ -615,7 +629,22 @@ function App() {
         riskLevel,
         requiresManualReview,
         recommendations,
-      } = await performComplianceCheck(document.structuredData)
+        normalizedStructuredData,
+      } = await performComplianceCheck(document.structuredData, {
+          rawData: document.rawData,
+          structuredDataWithConfidence: rawDataWithConfidence,
+          ocrConfidence: document.confidenceScores?.ocr,
+        })
+
+      if (normalizedStructuredData) {
+        setEditedData(normalizedStructuredData)
+        if (document) {
+          setDocument({
+            ...document,
+            structuredData: normalizedStructuredData,
+          })
+        }
+      }
 
       // Set the new compliance metadata immediately
       setComplianceRiskLevel(riskLevel)
@@ -636,6 +665,7 @@ function App() {
 
                 setDocument({
                   ...document,
+                  structuredData: normalizedStructuredData || document.structuredData,
                   confidenceScores: updatedScores,
                 })
               }

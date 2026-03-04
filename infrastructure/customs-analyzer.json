@@ -1,6 +1,5 @@
 {
     "baseAnalyzerId": "prebuilt-document",
-    "scenario": "document",
     "description": "Customs declaration document analyzer for extracting trade compliance fields with enhanced table extraction",
     "models": {
         "completion": "gpt-4.1",

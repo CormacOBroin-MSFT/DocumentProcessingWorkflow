@@ -6,9 +6,8 @@ import os
 import re
 import uuid
 import logging
-from datetime import datetime, timedelta
 from typing import Optional, BinaryIO
-from azure.storage.blob import BlobServiceClient, ContentSettings, generate_blob_sas, BlobSasPermissions
+from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.identity import DefaultAzureCredential
 from app.config import config
 
@@ -59,32 +58,6 @@ class AzureBlobService:
         except Exception as e:
             logger.warning(f"Could not verify/create container: {e}")
     
-    def _get_user_delegation_sas(self, blob_name: str, expiry_hours: int = 1) -> str:
-        """
-        Generate a User Delegation SAS token using identity-based auth.
-        This doesn't require storage account keys.
-        """
-        # Get user delegation key (valid for up to 7 days)
-        delegation_key_start = datetime.utcnow()
-        delegation_key_expiry = delegation_key_start + timedelta(hours=expiry_hours)
-        
-        user_delegation_key = self.blob_service_client.get_user_delegation_key(
-            key_start_time=delegation_key_start,
-            key_expiry_time=delegation_key_expiry
-        )
-        
-        # Generate SAS token using the delegation key
-        sas_token = generate_blob_sas(
-            account_name=self.account_name,
-            container_name=self.container_name,
-            blob_name=blob_name,
-            user_delegation_key=user_delegation_key,
-            permission=BlobSasPermissions(read=True),
-            expiry=delegation_key_expiry
-        )
-        
-        return sas_token
-    
     def upload_file(
         self, 
         file_stream: BinaryIO, 
@@ -100,7 +73,7 @@ class AzureBlobService:
             content_type: MIME type of the file
             
         Returns:
-            str: URL of the uploaded blob with SAS token for external access
+            str: Plain blob URL (Content Understanding accesses via its managed identity)
         """
         blob_name = f"{uuid.uuid4()}-{filename}"
         logger.info(f"   Creating blob: {blob_name}")
@@ -119,23 +92,15 @@ class AzureBlobService:
             overwrite=True
         )
         
-        # Generate SAS URL for external services (like Document Intelligence) to access
-        logger.info(f"   Generating User Delegation SAS token...")
-        sas_token = self._get_user_delegation_sas(blob_name)
-        sas_url = f"{blob_client.url}?{sas_token}"
-        
         logger.info(f"   Upload successful!")
-        return sas_url
+        return blob_client.url
     
-    def get_blob_url(self, blob_name: str, with_sas: bool = True) -> str:
-        """Get the URL for a specific blob, optionally with SAS token"""
+    def get_blob_url(self, blob_name: str) -> str:
+        """Get the URL for a specific blob"""
         blob_client = self.blob_service_client.get_blob_client(
             container=self.container_name,
             blob=blob_name
         )
-        if with_sas:
-            sas_token = self._get_user_delegation_sas(blob_name)
-            return f"{blob_client.url}?{sas_token}"
         return blob_client.url
     
     def delete_blob(self, blob_name: str) -> bool:

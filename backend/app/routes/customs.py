@@ -3,8 +3,11 @@ Customs Submission Routes
 Handles mock customs authority submission
 """
 import uuid
+import logging
 from datetime import datetime
 from flask import Blueprint, request, jsonify
+
+logger = logging.getLogger('autonomousflow.customs')
 
 bp = Blueprint('customs', __name__, url_prefix='/api/customs')
 
@@ -34,8 +37,13 @@ def submit_to_customs():
         return jsonify({'error': 'structured_data required'}), 400
     
     try:
+        logger.info("=" * 60)
+        logger.info("📨 STAGE 7: CUSTOMS SUBMISSION")
+        logger.info("=" * 60)
         submission_id = f"CUSTOMS-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
         timestamp = datetime.utcnow().isoformat() + 'Z'
+        logger.info(f"✅ Submitted mock declaration: {submission_id}")
+        logger.info("=" * 60)
         
         return jsonify({
             'document_id': document_id,

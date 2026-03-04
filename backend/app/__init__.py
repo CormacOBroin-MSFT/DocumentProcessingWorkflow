@@ -26,7 +26,13 @@ def setup_logging():
     )
     
     # Create stdout handler (Azure App Service captures stdout)
-    stdout_handler = logging.StreamHandler(sys.stdout)
+    # Force flush after every log record so output is never buffered
+    class FlushHandler(logging.StreamHandler):
+        def emit(self, record):
+            super().emit(record)
+            self.flush()
+    
+    stdout_handler = FlushHandler(sys.stderr)  # Write to stderr directly (always unbuffered)
     stdout_handler.setFormatter(formatter)
     stdout_handler.setLevel(log_level)
     
@@ -50,13 +56,20 @@ def setup_logging():
             app_logger.addHandler(handler)
         app_logger.setLevel(gunicorn_logger.level)
     
-    # Suppress noisy werkzeug access logs
+    # Suppress noisy werkzeug access logs (we have our own before/after_request hooks)
     logging.getLogger('werkzeug').setLevel(logging.WARNING)
+    
+    # Suppress verbose Azure SDK / HTTP client debug logs that drown out app output
+    for noisy_logger in [
+        'azure.core', 'azure.identity', 'azure.core.pipeline',
+        'urllib3', 'httpcore', 'httpx', 'openai',
+    ]:
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
     
     return app_logger
 
 def create_app():
-    load_dotenv()
+    load_dotenv(override=True)
     
     # Configure logging for production (works with Gunicorn)
     logger = setup_logging()
@@ -95,11 +108,11 @@ def create_app():
     
     app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
     
-    # Request logging - only log errors and non-status endpoints at debug level
+    # Request logging - keep non-status API transitions visible during click-through flow
     @app.before_request
     def log_request():
         if request.path.startswith('/api') and request.path != '/api/status':
-            logger.debug(f"→ {request.method} {request.path}")
+            logger.info(f"→ {request.method} {request.path}")
     
     @app.after_request
     def log_response(response):
@@ -107,7 +120,7 @@ def create_app():
             if response.status_code >= 400:
                 logger.warning(f"← {request.method} {request.path} [{response.status_code}]")
             else:
-                logger.debug(f"← {request.method} {request.path} [{response.status_code}]")
+                logger.info(f"← {request.method} {request.path} [{response.status_code}]")
         return response
     
     @app.route('/health', methods=['GET'])

@@ -79,7 +79,7 @@ resource aiProject 'Microsoft.CognitiveServices/accounts/projects@2025-06-01' = 
 // GPT-4.1 Model Deployment (required for Content Understanding and agent tasks)
 resource gpt41Deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   parent: aiFoundry
-  name: 'gpt-41'
+  name: 'gpt-4.1'
   sku: {
     name: 'GlobalStandard'
     capacity: 10
@@ -97,7 +97,7 @@ resource gpt41Deployment 'Microsoft.CognitiveServices/accounts/deployments@2025-
 // GPT-4.1-mini Model Deployment (faster, lower cost option)
 resource gpt41MiniDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   parent: aiFoundry
-  name: 'gpt-41-mini'
+  name: 'gpt-4.1-mini'
   dependsOn: [gpt41Deployment]
   sku: {
     name: 'GlobalStandard'

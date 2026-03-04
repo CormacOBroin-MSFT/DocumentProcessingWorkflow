@@ -4,13 +4,13 @@ Compliance Tools Module
 This module defines tools (functions) that agents can invoke to access
 reference data from CosmosDB and perform compliance checks.
 
-Tools are defined using the @ai_function decorator from Microsoft Agent Framework.
+Tools are defined using the @tool decorator from Microsoft Agent Framework.
 """
 
 from typing import Annotated, Optional, Any
 from pydantic import Field
 
-from agent_framework import ai_function
+from agent_framework import tool as ai_function
 
 # These will be initialized when the workflow starts
 _hs_code_service = None

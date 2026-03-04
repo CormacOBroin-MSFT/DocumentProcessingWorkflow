@@ -92,7 +92,7 @@ if [ "$NEED_BICEP_DEPLOY" = "true" ]; then
     echo "     • Azure AI Search: ${BASE_NAME}-search"
     echo "     • Cosmos DB: ${COSMOS_ACCOUNT_NAME}"
     echo "     • Foundry Project: ${BASE_NAME}-project"
-    echo "     • Model Deployments: gpt-41, gpt-41-mini, text-embedding-3-large"
+    echo "     • Model Deployments: gpt-4.1, gpt-4.1-mini, text-embedding-3-large"
     echo ""
     
     # Run deployment
@@ -146,7 +146,7 @@ else
     log_success "All resources already exist, skipping Bicep deployment"
     CU_ENDPOINT=$(az cognitiveservices account show --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP --query properties.endpoint -o tsv)
     OPENAI_ENDPOINT=$CU_ENDPOINT
-    OPENAI_DEPLOYMENT=$(az cognitiveservices account deployment list --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP --query "[?contains(name, 'gpt-41')].name | [0]" -o tsv 2>/dev/null || echo "gpt-41")
+    OPENAI_DEPLOYMENT=$(az cognitiveservices account deployment list --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP --query "[?contains(name, 'gpt-4.1')].name | [0]" -o tsv 2>/dev/null || echo "gpt-4.1")
     # Get Cosmos DB endpoint for existing deployments
     COSMOS_ENDPOINT=$(az cosmosdb show --name $COSMOS_ACCOUNT_NAME --resource-group $RESOURCE_GROUP --query documentEndpoint -o tsv 2>/dev/null || echo "")
 fi
@@ -282,6 +282,13 @@ if [ -n "$MANAGED_IDENTITY_ID" ]; then
     --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
     --output none 2>/dev/null || true
   
+  echo "   Assigning Storage Blob Data Reader to hub identity (for Content Understanding blob access)..."
+  az role assignment create \
+    --assignee $MANAGED_IDENTITY_ID \
+    --role "Storage Blob Data Reader" \
+    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$STORAGE_NAME" \
+    --output none 2>/dev/null || true
+  
   log_success "Hub identity role assignments complete"
 else
   log_warning "Could not get Foundry hub managed identity for role assignments"
@@ -339,6 +346,7 @@ log_step "Creating $ENV_FILE..."
   echo ""
   echo "# Azure Content Understanding (uses Azure CLI credentials)"
   echo "AZURE_CONTENT_UNDERSTANDING_ENDPOINT=${CU_ENDPOINT}"
+  echo "AZURE_CONTENT_UNDERSTANDING_ANALYZER_ID=${AZURE_CONTENT_UNDERSTANDING_ANALYZER_ID:-customsDeclaration}"
   echo ""
   echo "# Azure OpenAI (same AI Services endpoint)"
   echo "AZURE_OPENAI_ENDPOINT=${OPENAI_ENDPOINT}"
@@ -776,6 +784,32 @@ else
     echo "   python agents/workflow.py --create"
 fi
 
+# Deploy/update the workflow YAML to Foundry
+log_step "Deploying workflow YAML to Azure AI Foundry..."
+WORKFLOW_YAML="$PROJECT_DIR/agents/compliance-workflow.yaml"
+if [ -f "$WORKFLOW_YAML" ]; then
+    WORKFLOW_TOKEN=$(az account get-access-token --resource https://ai.azure.com --query accessToken -o tsv)
+    WORKFLOW_CONTENT=$(cat "$WORKFLOW_YAML")
+    
+    # Deploy via the agents API - create_version for the workflow agent
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+      -X PUT "${AI_PROJECT_ENDPOINT}/agents/customs-compliance-workflow?api-version=2025-05-15-preview" \
+      -H "Authorization: Bearer $WORKFLOW_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "{\"definition\": $(python3 -c "import json,yaml; print(json.dumps(yaml.safe_load(open('$WORKFLOW_YAML'))))")}" \
+      2>/dev/null)
+    
+    if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+        log_success "Workflow deployed to Foundry"
+    else
+        log_warning "Workflow deployment returned HTTP $HTTP_CODE"
+        echo "   You may need to update the workflow manually in Azure AI Foundry."
+        echo "   Copy the content of agents/compliance-workflow.yaml to the workflow definition."
+    fi
+else
+    log_warning "Workflow YAML not found: $WORKFLOW_YAML"
+fi
+
 # Deactivate venv
 deactivate
 
@@ -797,7 +831,7 @@ echo ""
 echo "View in Azure AI Foundry:"
 echo "  https://ai.azure.com → Your Project → Agents"
 echo ""
-echo "Run the workflow with tracing to visualize fan-out/fan-in:"
+echo "Run the workflow locally with tracing:"
 echo "  python agents/workflow.py --run --trace"
 echo "  View traces: VS Code → AI Toolkit → Tracing"
 echo ""

@@ -2,8 +2,11 @@
 Azure AI Foundry Workflow Client
 Invokes the customs compliance workflow deployed in Azure AI Foundry.
 
-This uses the OpenAI-compatible client to call the workflow directly,
-letting Foundry handle the orchestration of all agents server-side.
+This uses the OpenAI-compatible conversations API to call the workflow as
+a single API call. Foundry handles the sequential orchestration of all
+8 agents server-side — no fan-out, no individual agent calls from this client.
+
+Always uses the latest deployed version of the workflow and agents.
 
 TRACING: OpenTelemetry tracing is configured in run.py at application startup.
 """
@@ -18,9 +21,8 @@ logger = logging.getLogger('autonomousflow.workflow_client')
 # Configuration from environment
 AZURE_AI_PROJECT_ENDPOINT = os.getenv("AZURE_AI_PROJECT_ENDPOINT")
 
-# Workflow configuration
+# Workflow configuration — always uses latest version
 WORKFLOW_NAME = "customs-compliance-workflow"
-WORKFLOW_VERSION = "2"
 
 
 def is_tracing_enabled() -> bool:
@@ -37,8 +39,11 @@ class WorkflowClient:
     """
     Client for executing Azure AI Foundry workflows.
     
-    Uses the OpenAI-compatible client to invoke workflows directly,
-    allowing Foundry to orchestrate the agent execution server-side.
+    Makes a single API call to the Foundry workflow endpoint.
+    Foundry runs all agents sequentially server-side:
+    7 specialist agents → 1 aggregator → ComplianceReport JSON.
+    
+    Always uses the latest version of the workflow and agents.
     """
     
     def __init__(self):
@@ -72,19 +77,40 @@ class WorkflowClient:
         from azure.ai.projects.models import ResponseStreamEventType
         
         logger.info("=" * 60)
-        logger.info("🚀 INVOKING FOUNDRY WORKFLOW: %s (v%s)", WORKFLOW_NAME, WORKFLOW_VERSION)
+        logger.info("🚀 INVOKING FOUNDRY WORKFLOW: %s (latest)", WORKFLOW_NAME)
         logger.info("   Declaration ID: %s", declaration_data.get('declaration_id', 'N/A'))
         logger.info("   Endpoint: %s", self.endpoint)
         logger.info("=" * 60)
         
-        # Format input message
-        input_message = f"""Analyze this customs declaration for compliance:
-
-```json
-{json.dumps(declaration_data, indent=2)}
-```
-
-Run all compliance checks and return a ComplianceReport JSON."""
+        # Separate OCR extraction context from declaration fields
+        ocr_extraction = declaration_data.pop('ocr_extraction', None)
+        
+        # Format input message with full context
+        message_parts = [
+            "Analyze this customs declaration for compliance:",
+            "",
+            "## Declaration Fields",
+            "```json",
+            json.dumps(declaration_data, indent=2),
+            "```",
+        ]
+        
+        if ocr_extraction:
+            message_parts.extend([
+                "",
+                "## Full OCR Extraction Context",
+                "The fields above were extracted from the source document by Azure AI Content Understanding.",
+                "Below is the complete extraction result including per-field confidence scores and raw document key-value pairs.",
+                "Use this context for richer analysis — low-confidence fields may warrant closer scrutiny.",
+                "```json",
+                json.dumps(ocr_extraction, indent=2),
+                "```",
+            ])
+        
+        message_parts.append("")
+        message_parts.append("Run all compliance checks and return a ComplianceReport JSON.")
+        
+        input_message = "\n".join(message_parts)
         
         credential = DefaultAzureCredential()
         project_client = AIProjectClient(
@@ -94,7 +120,6 @@ Run all compliance checks and return a ComplianceReport JSON."""
         
         workflow_config = {
             "name": WORKFLOW_NAME,
-            "version": WORKFLOW_VERSION,
         }
         
         final_response = ""
@@ -127,7 +152,8 @@ Run all compliance checks and return a ComplianceReport JSON."""
                         extra_body={
                             "agent": {
                                 "name": workflow_config["name"],
-                                "type": "agent_reference"
+                                "type": "agent_reference",
+                                "version": "18"
                             }
                         },
                         input=input_message,
@@ -215,11 +241,27 @@ Run all compliance checks and return a ComplianceReport JSON."""
         
         # Parse the response
         result = self._parse_json_response(final_response)
+        if isinstance(result, list):
+            result = {
+                "summary": "Workflow returned a list of findings",
+                "overall_risk": "medium",
+                "findings": result,
+                "counts": {
+                    "critical": 0,
+                    "high": 0,
+                    "medium": 0,
+                    "low": 0,
+                    "total": len(result),
+                },
+                "agents_reporting": {},
+                "recommendations": [],
+            }
+        elif not isinstance(result, dict):
+            result = {"raw_response": str(result)}
         
         # Add workflow metadata
         result["_workflow_metadata"] = {
             "workflow_name": WORKFLOW_NAME,
-            "workflow_version": WORKFLOW_VERSION,
             "actions_executed": workflow_actions,
         }
         
