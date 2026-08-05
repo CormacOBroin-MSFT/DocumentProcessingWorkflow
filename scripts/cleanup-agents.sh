@@ -30,21 +30,30 @@ if ! az account show &>/dev/null; then
 fi
 log_success "Logged in to Azure"
 
-# Load environment
-if [ -f "$PROJECT_DIR/backend/.env" ]; then
-    log_step "Loading environment from .env..."
-    export $(grep -v '^#' "$PROJECT_DIR/backend/.env" | xargs)
-    log_success "Environment loaded"
-else
-    log_error "No .env file found. Run setup-azure.sh first."
-    exit 1
-fi
-
 # Activate venv
 if [ -d "$PROJECT_DIR/backend/venv" ]; then
     source "$PROJECT_DIR/backend/venv/bin/activate"
 else
     log_error "Python venv not found. Run setup-azure.sh first."
+    exit 1
+fi
+
+if [ -f "$PROJECT_DIR/backend/.env" ]; then
+    log_step "Loading environment from .env..."
+    while IFS= read -r -d '' env_entry; do
+        export "$env_entry"
+    done < <(python - "$PROJECT_DIR/backend/.env" <<'PY'
+import sys
+from dotenv import dotenv_values
+
+for key, value in dotenv_values(sys.argv[1]).items():
+    if value is not None:
+        sys.stdout.write(f"{key}={value}\0")
+PY
+)
+    log_success "Environment loaded"
+else
+    log_error "No .env file found. Run setup-azure.sh first."
     exit 1
 fi
 

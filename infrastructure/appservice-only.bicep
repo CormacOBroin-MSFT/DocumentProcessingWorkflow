@@ -36,11 +36,6 @@ resource cosmosDbAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' exis
   name: '${baseName}-cosmos'
 }
 
-// Existing Key Vault
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
-  name: '${baseName}-kv'
-}
-
 // Get GPT-4.1 deployment name (should be 'gpt-41')
 var gptDeploymentName = 'gpt-41'
 
@@ -133,11 +128,6 @@ resource appService 'Microsoft.Web/sites@2023-01-01' = {
           name: 'AZURE_AI_MODEL_DEPLOYMENT_NAME'
           value: gptDeploymentName
         }
-        // Key Vault
-        {
-          name: 'AZURE_KEY_VAULT_URL'
-          value: keyVault.properties.vaultUri
-        }
         // Flask
         {
           name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
@@ -179,20 +169,6 @@ resource cognitiveServicesUser 'Microsoft.Authorization/roleAssignments@2022-04-
     roleDefinitionId: subscriptionResourceId(
       'Microsoft.Authorization/roleDefinitions',
       'a97b65f3-24c7-4388-baec-2e87135dc908'
-    )
-    principalId: appService.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// Key Vault Secrets User
-resource keyVaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, appService.id, 'Key Vault Secrets User')
-  scope: keyVault
-  properties: {
-    roleDefinitionId: subscriptionResourceId(
-      'Microsoft.Authorization/roleDefinitions',
-      '4633458b-17de-408a-b874-0445c86b69e6'
     )
     principalId: appService.identity.principalId
     principalType: 'ServicePrincipal'

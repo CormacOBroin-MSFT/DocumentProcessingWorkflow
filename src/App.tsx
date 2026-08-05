@@ -3,7 +3,7 @@
  * Customs Document Processing Workflow
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -92,7 +92,6 @@ function App() {
 
   // Processing state
   const [showScanLine, setShowScanLine] = useState(false)
-  const [showRawData, setShowRawData] = useState(false)
   const [showStructuredData, setShowStructuredData] = useState(false)
   const [rawDataWithConfidence, setRawDataWithConfidence] = useState<StructuredDataWithConfidence | null>(null)
 
@@ -162,7 +161,6 @@ function App() {
     setDocument(null)
     setUploadProgress(0)
     setShowScanLine(false)
-    setShowRawData(false)
     setShowStructuredData(false)
     setComplianceChecks([])
     setComplianceDescriptions([])
@@ -477,7 +475,6 @@ function App() {
 
         setTimeout(() => {
           setShowScanLine(false)
-          setShowRawData(true)
 
           const hasStructuredData =
             structuredData && Object.values(structuredData).some((field) => field?.value)
@@ -832,7 +829,7 @@ function App() {
         submissionId: `CUSTOMS-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
       }
       
-      const result = await storeInCosmosDB(dataToStore)
+      await storeInCosmosDB(dataToStore)
       
       toast.success('Declaration stored in Cosmos DB')
       

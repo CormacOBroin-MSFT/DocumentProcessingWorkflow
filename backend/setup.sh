@@ -15,6 +15,10 @@ if ! command -v python3 &> /dev/null; then
 fi
 
 echo "✅ Python found: $(python3 --version)"
+if ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 9))'; then
+    echo "❌ Python 3.9 or newer is required."
+    exit 1
+fi
 echo ""
 
 # Navigate to backend directory

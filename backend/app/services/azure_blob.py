@@ -23,7 +23,9 @@ class AzureBlobService:
         if not self.account_name:
             raise ValueError("Azure Storage account not configured")
         
-        # Use DefaultAzureCredential (Azure CLI login) instead of connection string keys
+        # This storage account has shared-key access disabled, so we must use
+        # Azure AD (DefaultAzureCredential). Ensure `az login` is signed into the
+        # storage account's tenant with a Storage Blob Data role assigned.
         logger.info(f"Initializing Blob Storage with DefaultAzureCredential for account: {self.account_name}")
         account_url = f"https://{self.account_name}.blob.core.windows.net"
         

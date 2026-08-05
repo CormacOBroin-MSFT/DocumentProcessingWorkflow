@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Dict, List, Optional
 from openai import AzureOpenAI
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from azure.identity import DefaultAzureCredential, AzureCliCredential
 from app.config import config
 from app.agent_prompts import (
     DATA_TRANSFORMATION_SYSTEM_PROMPT,
@@ -26,27 +26,45 @@ class LLMService:
         if not config.AZURE_OPENAI_DEPLOYMENT:
             raise ValueError("Azure OpenAI deployment name not configured")
         
-        # Use API key if provided, otherwise use DefaultAzureCredential (Azure CLI login)
+        self.model = config.AZURE_OPENAI_DEPLOYMENT
+        
+        # Use API key if provided, otherwise use credential-based auth (RBAC)
         if config.AZURE_OPENAI_KEY:
+            logger.info("🔑 Using explicit API key for Azure OpenAI auth")
+            self.api_key = config.AZURE_OPENAI_KEY
+            self.credential = None
+        else:
+            # Use credentials for RBAC-based auth (disableLocalAuth=true)
+            logger.info("🔐 Using DefaultAzureCredential for RBAC-based auth (disableLocalAuth=true)")
+            self.credential = DefaultAzureCredential()  # Includes CLI, env, managed identity, etc.
+            self.api_key = None
+        
+        self._ensure_valid_client()
+    
+    def _create_client(self):
+        """Create OpenAI client with current credentials."""
+        if self.api_key:
+            # Use API key auth
             self.client = AzureOpenAI(
-                api_key=config.AZURE_OPENAI_KEY,
+                api_key=self.api_key,
                 api_version="2024-02-01",
                 azure_endpoint=config.AZURE_OPENAI_ENDPOINT
             )
         else:
-            # Get token from Azure CLI credentials
-            credential = DefaultAzureCredential()
-            token = credential.get_token("https://cognitiveservices.azure.com/.default")
-            
+            # Use credential-based auth with token provider
             self.client = AzureOpenAI(
-                api_key=token.token,  # Use the token as API key
                 api_version="2024-02-01",
-                azure_endpoint=config.AZURE_OPENAI_ENDPOINT
+                azure_endpoint=config.AZURE_OPENAI_ENDPOINT,
+                azure_ad_token_provider=lambda: self.credential.get_token(
+                    "https://cognitiveservices.azure.com/.default"
+                ).token
             )
-            # Store credential for token refresh if needed
-            self._credential = credential
-        
-        self.model = config.AZURE_OPENAI_DEPLOYMENT
+    
+    def _ensure_valid_client(self):
+        """Ensure we have a valid client with fresh credentials."""
+        logger.debug(f"Creating AzureOpenAI client for {self.model}...")
+        self._create_client()
+        logger.debug(f"✓ LLM client ready (endpoint: {config.AZURE_OPENAI_ENDPOINT})")
     
     def transform_to_structured_data(self, raw_data: Dict) -> Dict:
         """
@@ -138,6 +156,12 @@ Return ONLY valid JSON.
             logger.error(f"Error in LLM transformation: {e}")
             raise
     
+    def _refresh_token_if_needed(self):
+        """Refresh token if using credential-based auth."""
+        if self.credential:
+            self.api_key = self.credential.get_token("https://cognitiveservices.azure.com/.default").token
+            self._create_client()
+    
     def perform_compliance_check(self, structured_data: Dict) -> Dict:
         """
         Validate customs declaration against compliance requirements using agent framework
@@ -148,11 +172,24 @@ Return ONLY valid JSON.
         Returns:
             Dict with checks, confidence, reasoning, and risk_level
         """
+        # Handle case where structured_data might be a string
+        if isinstance(structured_data, str):
+            try:
+                structured_data = json.loads(structured_data)
+            except json.JSONDecodeError:
+                structured_data = {}
+        
+        # Extract shipper safely
+        shipper_info = structured_data.get('shipper', {}) if isinstance(structured_data, dict) else {}
+        shipper_name = shipper_info.get('value', shipper_info.get('name', '?')) if isinstance(shipper_info, dict) else str(shipper_info)
+        
+        logger.debug(f"Starting compliance check for shipper={shipper_name}")
         user_prompt = COMPLIANCE_VALIDATION_USER_PROMPT_TEMPLATE.format(
             structured_data=json.dumps(structured_data, indent=2)
         )
-
+        
         try:
+            logger.debug(f"Calling Azure OpenAI ({self.model}) for compliance validation...")
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -161,39 +198,39 @@ Return ONLY valid JSON.
                 ],
                 response_format={"type": "json_object"}
             )
-            
-            result = json.loads(response.choices[0].message.content)
-            
-            checks = result.get('checks', [True, True, True, True, True])
-            check_names = [
-                'HS Code Validation',
-                'Country Restrictions', 
-                'Value Declaration',
-                'Shipper Verification',
-                'Document Completeness'
-            ]
-            default_descriptions = [
-                'HS code format validated' if checks[0] else 'HS code format invalid',
-                'No country restrictions found' if checks[1] else 'Country restrictions apply',
-                'Value declaration acceptable' if checks[2] else 'Value declaration issue',
-                'Shipper verified' if checks[3] else 'Shipper verification failed',
-                'Document complete' if checks[4] else 'Document incomplete'
-            ]
-            
-            return {
-                'checks': checks,
-                'compliance_confidence': result.get('confidence', 0.88),
-                'reasoning': result.get('reasoning', 'Compliance check completed'),
-                'risk_level': result.get('risk_level', 'MEDIUM'),
-                'issue_descriptions': result.get('issue_descriptions', default_descriptions),
-                'issues': [
-                    check_name for check_name, passed in zip(check_names, checks) if not passed
-                ]
-            }
-        
+            logger.debug("✓ LLM response received successfully")
         except Exception as e:
-            print(f"Error in LLM compliance check: {e}")
+            logger.error(f"Compliance check failed: {type(e).__name__}: {str(e)[:300]}")
             raise
+        
+        result = json.loads(response.choices[0].message.content)
+        
+        checks = result.get('checks', [True, True, True, True, True])
+        check_names = [
+            'HS Code Validation',
+            'Country Restrictions', 
+            'Value Declaration',
+            'Shipper Verification',
+            'Document Completeness'
+        ]
+        default_descriptions = [
+            'HS code format validated' if checks[0] else 'HS code format invalid',
+            'No country restrictions found' if checks[1] else 'Country restrictions apply',
+            'Value declaration acceptable' if checks[2] else 'Value declaration issue',
+            'Shipper verified' if checks[3] else 'Shipper verification failed',
+            'Document complete' if checks[4] else 'Document incomplete'
+        ]
+        
+        return {
+            'checks': checks,
+            'compliance_confidence': result.get('confidence', 0.88),
+            'reasoning': result.get('reasoning', 'Compliance check completed'),
+            'risk_level': result.get('risk_level', 'MEDIUM'),
+            'issue_descriptions': result.get('issue_descriptions', default_descriptions),
+            'issues': [
+                check_name for check_name, passed in zip(check_names, checks) if not passed
+            ]
+        }
 
 def get_llm_service() -> Optional[LLMService]:
     """Factory function to get LLM service instance"""

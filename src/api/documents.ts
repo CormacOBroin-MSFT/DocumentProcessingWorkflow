@@ -3,32 +3,16 @@
  * Uses React Query for caching, retries, and state management
  */
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { z } from 'zod'
 import { toast } from 'sonner'
 import { API_CONFIG } from '@/constants'
 import type {
     CustomsDeclaration,
     StructuredDataWithConfidence,
-    ConfidenceScores,
 } from '@/types/customs'
 
 // ----- Zod Schemas for API Response Validation -----
-
-const FieldConfidenceSchema = z.object({
-    value: z.string(),
-    confidence: z.number().min(0).max(1),
-}).passthrough()
-
-const StructuredDataSchema = z.object({
-    shipper: FieldConfidenceSchema.optional(),
-    receiver: FieldConfidenceSchema.optional(),
-    goodsDescription: FieldConfidenceSchema.optional(),
-    value: FieldConfidenceSchema.optional(),
-    countryOfOrigin: FieldConfidenceSchema.optional(),
-    hsCode: FieldConfidenceSchema.optional(),
-    weight: FieldConfidenceSchema.optional(),
-}).passthrough()
 
 const StatusResponseSchema = z.object({
     azureConfigured: z.boolean(),

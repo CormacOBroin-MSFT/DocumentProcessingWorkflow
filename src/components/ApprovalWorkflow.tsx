@@ -5,7 +5,6 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Progress } from '@/components/ui/progress'
 import {
     Warning,
@@ -69,7 +68,6 @@ export function ApprovalWorkflow({
     onApprove,
     onSaveDraft,
     onReturnToAutomation,
-    onCancel,
     onConfidenceChange,
 }: ApprovalWorkflowProps) {
     // Editable data state

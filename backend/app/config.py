@@ -20,7 +20,7 @@ class Config:
     # Azure OpenAI (AI Foundry)
     AZURE_OPENAI_ENDPOINT: Optional[str] = os.getenv('AZURE_OPENAI_ENDPOINT')
     AZURE_OPENAI_KEY: Optional[str] = os.getenv('AZURE_OPENAI_KEY')
-    AZURE_OPENAI_DEPLOYMENT: str = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-4o')
+    AZURE_OPENAI_DEPLOYMENT: str = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-41')
     
     # Azure Cosmos DB
     AZURE_COSMOS_ENDPOINT: Optional[str] = os.getenv('AZURE_COSMOS_ENDPOINT')

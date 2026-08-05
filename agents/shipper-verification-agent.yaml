@@ -86,7 +86,7 @@ tools:
   - type: bing_grounding
     bing_grounding:
       search_configurations:
-        - project_connection_id: /subscriptions/a69f4fd4-161a-4653-a0fd-561025636136/resourceGroups/autonomousflow-rg/providers/Microsoft.CognitiveServices/accounts/autonomousflow-foundry/projects/autonomousflow-project/connections/autonomousflow-bingsearch
+        - project_connection_id: /subscriptions/a69f4fd4-161a-4653-a0fd-561025636136/resourceGroups/autonomousflow-rg/providers/Microsoft.CognitiveServices/accounts/autonomousflow-foundry/projects/autonomousflow-project/connections/autonomousflow-bing
           market: en-us
           set_lang: en
           count: 5

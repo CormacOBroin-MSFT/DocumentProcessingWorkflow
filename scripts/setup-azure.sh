@@ -1,5 +1,9 @@
 #!/bin/bash
-set -e
+if [ -z "${BASH_VERSION:-}" ]; then
+  exec /bin/bash "$0" "$@"
+fi
+
+set -euo pipefail
 
 # Configuration
 RESOURCE_GROUP="autonomousflow-rg"
@@ -37,6 +41,13 @@ trap 'handle_error $LINENO' ERR
 # Source shared functions
 source "$SCRIPT_DIR/setup-analyzer.sh"
 
+for command_name in az curl jq python3; do
+  if ! command -v "$command_name" &>/dev/null; then
+    log_error "Required command not found: $command_name"
+    exit 1
+  fi
+done
+
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🔧 Azure Infrastructure Setup"
@@ -61,24 +72,62 @@ az group create --name $RESOURCE_GROUP --location $LOCATION --output none
 log_success "Resource group ready"
 echo ""
 
-# Check if resources already exist
 AI_SERVICES_NAME="${BASE_NAME}-foundry"
 STORAGE_NAME="${BASE_NAME//-/}storage"
 COSMOS_ACCOUNT_NAME="${BASE_NAME}-cosmos"
+SEARCH_SERVICE_NAME="${BASE_NAME}-search"
+AI_PROJECT_NAME="${BASE_NAME}-project"
 
-log_step "Checking for existing resources..."
-EXISTING_AI=$(az cognitiveservices account show --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP 2>/dev/null || echo "")
-EXISTING_COSMOS=$(az cosmosdb show --name $COSMOS_ACCOUNT_NAME --resource-group $RESOURCE_GROUP 2>/dev/null || echo "")
+log_step "Checking state of required infrastructure resources..."
 
-# Decide if we need to run Bicep deployment
-NEED_BICEP_DEPLOY="false"
-if [ -z "$EXISTING_AI" ]; then
-    NEED_BICEP_DEPLOY="true"
-    log_step "AI Services not found, will deploy..."
+# Probe each required resource and only deploy Bicep when something is absent.
+# Bicep runs in incremental mode, so the deploy only creates/updates the
+# specific resources that are missing or drifted — existing ones are untouched.
+MISSING_RESOURCES=()
+
+check_resource() {
+  # $1 = human-readable label, $2... = az command that succeeds if it exists
+  local label="$1"; shift
+  if "$@" &>/dev/null; then
+    log_success "  ✓ $label exists"
+  else
+    log_warning "  ✗ $label missing"
+    MISSING_RESOURCES+=("$label")
+  fi
+}
+
+check_resource "Storage account ($STORAGE_NAME)" \
+  az storage account show --name "$STORAGE_NAME" --resource-group "$RESOURCE_GROUP"
+check_resource "AI Services ($AI_SERVICES_NAME)" \
+  az cognitiveservices account show --name "$AI_SERVICES_NAME" --resource-group "$RESOURCE_GROUP"
+check_resource "AI Search ($SEARCH_SERVICE_NAME)" \
+  az resource show --name "$SEARCH_SERVICE_NAME" --resource-group "$RESOURCE_GROUP" --resource-type "Microsoft.Search/searchServices"
+check_resource "Cosmos DB ($COSMOS_ACCOUNT_NAME)" \
+  az cosmosdb show --name "$COSMOS_ACCOUNT_NAME" --resource-group "$RESOURCE_GROUP"
+
+# Required model deployments (only checkable if the AI Services account exists)
+if az cognitiveservices account show --name "$AI_SERVICES_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+  for model_deployment in gpt-41 gpt-41-mini text-embedding-3-large; do
+    if az cognitiveservices account deployment show \
+         --name "$AI_SERVICES_NAME" --resource-group "$RESOURCE_GROUP" \
+         --deployment-name "$model_deployment" &>/dev/null; then
+      log_success "  ✓ Model deployment ($model_deployment) exists"
+    else
+      log_warning "  ✗ Model deployment ($model_deployment) missing"
+      MISSING_RESOURCES+=("Model deployment ($model_deployment)")
+    fi
+  done
 fi
-if [ -z "$EXISTING_COSMOS" ]; then
-    NEED_BICEP_DEPLOY="true"
-    log_step "Cosmos DB not found, will deploy..."
+
+if [ ${#MISSING_RESOURCES[@]} -eq 0 ]; then
+  NEED_BICEP_DEPLOY="false"
+  log_success "All required resources present — skipping Bicep deployment"
+else
+  NEED_BICEP_DEPLOY="true"
+  log_step "Missing resources detected — running incremental Bicep deploy for:"
+  for missing in "${MISSING_RESOURCES[@]}"; do
+    echo "     • $missing"
+  done
 fi
 
 if [ "$NEED_BICEP_DEPLOY" = "true" ]; then
@@ -97,13 +146,12 @@ if [ "$NEED_BICEP_DEPLOY" = "true" ]; then
     
     # Run deployment
     if ! az deployment group create \
-      --resource-group $RESOURCE_GROUP \
+      --name local-dev \
+      --resource-group "$RESOURCE_GROUP" \
       --template-file "$PROJECT_DIR/infrastructure/local-dev.bicep" \
-      --parameters baseName=$BASE_NAME location=$LOCATION \
-      --output none 2>&1 | tee /tmp/bicep-deploy.log; then
+      --parameters baseName="$BASE_NAME" location="$LOCATION" \
+      --output none 2>&1 | tee "${TMPDIR:-/tmp}/autonomousflow-bicep-deploy.log"; then
         log_error "Bicep deployment failed!"
-        echo ""
-        echo "📋 Deployment log: /tmp/bicep-deploy.log"
         echo ""
         echo "Recent deployment operations:"
         az deployment operation group list \
@@ -123,16 +171,23 @@ if [ "$NEED_BICEP_DEPLOY" = "true" ]; then
       --name local-dev \
       --query properties.outputs -o json)
     
-    STORAGE_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.storageAccountName.value')
-    CU_ENDPOINT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.contentUnderstandingEndpoint.value')
-    AI_SERVICES_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.aiServicesName.value')
-    AI_PROJECT_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.aiProjectName.value')
-    OPENAI_ENDPOINT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.openAIEndpoint.value')
-    OPENAI_DEPLOYMENT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.openAIDeploymentName.value')
-    SEARCH_SERVICE_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.searchServiceName.value')
-    SEARCH_ENDPOINT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.searchServiceEndpoint.value')
-    COSMOS_ENDPOINT=$(echo $DEPLOYMENT_OUTPUT | jq -r '.cosmosDbEndpoint.value')
-    COSMOS_ACCOUNT_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.cosmosDbAccountName.value')
+    STORAGE_NAME=$(jq -r '.storageAccountName.value // empty' <<< "$DEPLOYMENT_OUTPUT")
+    CU_ENDPOINT=$(jq -r '.contentUnderstandingEndpoint.value // empty' <<< "$DEPLOYMENT_OUTPUT")
+    AI_SERVICES_NAME=$(jq -r '.aiServicesName.value // empty' <<< "$DEPLOYMENT_OUTPUT")
+    AI_PROJECT_NAME=$(jq -r '.aiProjectName.value // empty' <<< "$DEPLOYMENT_OUTPUT")
+    OPENAI_ENDPOINT=$(jq -r '.openAIEndpoint.value // empty' <<< "$DEPLOYMENT_OUTPUT")
+    OPENAI_DEPLOYMENT=$(jq -r '.openAIDeploymentName.value // empty' <<< "$DEPLOYMENT_OUTPUT")
+    SEARCH_SERVICE_NAME=$(jq -r '.searchServiceName.value // empty' <<< "$DEPLOYMENT_OUTPUT")
+    SEARCH_ENDPOINT=$(jq -r '.searchServiceEndpoint.value // empty' <<< "$DEPLOYMENT_OUTPUT")
+    COSMOS_ENDPOINT=$(jq -r '.cosmosDbEndpoint.value // empty' <<< "$DEPLOYMENT_OUTPUT")
+    COSMOS_ACCOUNT_NAME=$(jq -r '.cosmosDbAccountName.value // empty' <<< "$DEPLOYMENT_OUTPUT")
+
+    for required_value in STORAGE_NAME CU_ENDPOINT AI_SERVICES_NAME AI_PROJECT_NAME OPENAI_ENDPOINT OPENAI_DEPLOYMENT SEARCH_SERVICE_NAME SEARCH_ENDPOINT COSMOS_ENDPOINT COSMOS_ACCOUNT_NAME; do
+      if [ -z "${!required_value}" ]; then
+        log_error "Deployment output is missing: $required_value"
+        exit 1
+      fi
+    done
     
     log_success "Microsoft Foundry (new) project created: $AI_PROJECT_NAME"
     
@@ -144,11 +199,13 @@ if [ "$NEED_BICEP_DEPLOY" = "true" ]; then
     fi
 else
     log_success "All resources already exist, skipping Bicep deployment"
-    CU_ENDPOINT=$(az cognitiveservices account show --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP --query properties.endpoint -o tsv)
+    # Pull every value the .env file needs directly from the existing resources.
+    CU_ENDPOINT=$(az cognitiveservices account show --name "$AI_SERVICES_NAME" --resource-group "$RESOURCE_GROUP" --query properties.endpoint -o tsv)
     OPENAI_ENDPOINT=$CU_ENDPOINT
-    OPENAI_DEPLOYMENT=$(az cognitiveservices account deployment list --name $AI_SERVICES_NAME --resource-group $RESOURCE_GROUP --query "[?contains(name, 'gpt-41')].name | [0]" -o tsv 2>/dev/null || echo "gpt-41")
-    # Get Cosmos DB endpoint for existing deployments
-    COSMOS_ENDPOINT=$(az cosmosdb show --name $COSMOS_ACCOUNT_NAME --resource-group $RESOURCE_GROUP --query documentEndpoint -o tsv 2>/dev/null || echo "")
+    OPENAI_DEPLOYMENT=$(az cognitiveservices account deployment list --name "$AI_SERVICES_NAME" --resource-group "$RESOURCE_GROUP" --query "[?contains(name, 'gpt-41')].name | [0]" -o tsv 2>/dev/null || echo "gpt-41")
+    COSMOS_ENDPOINT=$(az cosmosdb show --name "$COSMOS_ACCOUNT_NAME" --resource-group "$RESOURCE_GROUP" --query documentEndpoint -o tsv 2>/dev/null || echo "")
+    # Search has no queryable endpoint field; derive it from the service name.
+    SEARCH_ENDPOINT="https://${SEARCH_SERVICE_NAME}.search.windows.net"
 fi
 
 echo ""
@@ -165,167 +222,128 @@ STORAGE_CONNECTION_STRING=$(az storage account show-connection-string \
   --resource-group $RESOURCE_GROUP \
   --query connectionString -o tsv)
 
+# Helper: create a role assignment only if it isn't already present (skips slow no-op writes)
+ensure_role_assignment() {
+  # $1=assignee  $2=role  $3=scope  $4=label
+  local assignee="$1" role="$2" scope="$3" label="$4"
+  [ -z "$assignee" ] && return 0
+  if [ -n "$(az role assignment list --assignee "$assignee" --role "$role" --scope "$scope" --query "[0].id" -o tsv 2>/dev/null)" ]; then
+    log_success "   ✓ $label already assigned"
+  else
+    echo "   Assigning $label..."
+    az role assignment create --assignee "$assignee" --role "$role" --scope "$scope" --output none 2>/dev/null || log_warning "   Could not assign $label"
+  fi
+}
+
 # Assign roles
 if [ -n "$USER_OBJECT_ID" ]; then
-  echo "   Assigning Cognitive Services User role..."
-  az role assignment create \
-    --assignee $USER_OBJECT_ID \
-    --role "Cognitive Services User" \
-    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.CognitiveServices/accounts/$AI_SERVICES_NAME" \
-    --output none 2>/dev/null || log_warning "Role may already exist"
-  
-  echo "   Assigning Storage Blob Data Contributor role..."
-  az role assignment create \
-    --assignee $USER_OBJECT_ID \
-    --role "Storage Blob Data Contributor" \
-    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$STORAGE_NAME" \
-    --output none 2>/dev/null || log_warning "Role may already exist"
-  
-  # Azure AI Search - assign Search Index Data Contributor role
   SEARCH_SERVICE_NAME="${SEARCH_SERVICE_NAME:-${BASE_NAME}-search}"
-  echo "   Assigning Search Index Data Contributor role..."
-  az role assignment create \
-    --assignee $USER_OBJECT_ID \
-    --role "Search Index Data Contributor" \
-    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
-    --output none 2>/dev/null || log_warning "Role may already exist"
-  
-  echo "   Assigning Search Service Contributor role..."
-  az role assignment create \
-    --assignee $USER_OBJECT_ID \
-    --role "Search Service Contributor" \
-    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
-    --output none 2>/dev/null || log_warning "Role may already exist"
-  
-  # Cosmos DB requires SQL Role Assignment for data plane access (different from Azure RBAC)
-  # Built-in Data Contributor role ID: 00000000-0000-0000-0000-000000000002
-  # We need ACCOUNT-LEVEL scope (not database-level) for the SDK to read metadata
-  COSMOS_ACCOUNT_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.DocumentDB/databaseAccounts/$COSMOS_ACCOUNT_NAME"
-  echo "   Assigning Cosmos DB SQL Role (Data Contributor) at account level..."
-  az cosmosdb sql role assignment create \
-    --account-name $COSMOS_ACCOUNT_NAME \
-    --resource-group $RESOURCE_GROUP \
-    --role-definition-id "00000000-0000-0000-0000-000000000002" \
-    --principal-id $USER_OBJECT_ID \
-    --scope "$COSMOS_ACCOUNT_ID" \
-    --output none 2>/dev/null || log_warning "Cosmos DB role may already exist"
 
-  # Ensure Cosmos DB public network access is enabled and developer IP is whitelisted.
-  # Azure Policy or Defender for Cloud can override the Bicep 'publicNetworkAccess: Enabled'
-  # setting post-deployment, so we explicitly enforce it here for local development.
-  COSMOS_PUBLIC_ACCESS=$(az cosmosdb show --name $COSMOS_ACCOUNT_NAME --resource-group $RESOURCE_GROUP --query publicNetworkAccess -o tsv 2>/dev/null || echo "")
-  if [ "$COSMOS_PUBLIC_ACCESS" != "Enabled" ]; then
-    echo "   Enabling Cosmos DB public network access for local development..."
-    DEV_IP=$(curl -s https://api.ipify.org 2>/dev/null || echo "")
-    if [ -n "$DEV_IP" ]; then
-      echo "   Whitelisting developer IP: $DEV_IP"
-      az cosmosdb update \
-        --name $COSMOS_ACCOUNT_NAME \
-        --resource-group $RESOURCE_GROUP \
-        --public-network-access ENABLED \
-        --ip-range-filter "$DEV_IP" \
-        --output none 2>/dev/null || log_warning "Could not update Cosmos DB network settings"
-    else
-      az cosmosdb update \
-        --name $COSMOS_ACCOUNT_NAME \
-        --resource-group $RESOURCE_GROUP \
-        --public-network-access ENABLED \
-        --output none 2>/dev/null || log_warning "Could not update Cosmos DB network settings"
-    fi
+  ensure_role_assignment "$USER_OBJECT_ID" "Cognitive Services User" \
+    "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.CognitiveServices/accounts/$AI_SERVICES_NAME" \
+    "Cognitive Services User"
+  ensure_role_assignment "$USER_OBJECT_ID" "Storage Blob Data Contributor" \
+    "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/$STORAGE_NAME" \
+    "Storage Blob Data Contributor"
+  ensure_role_assignment "$USER_OBJECT_ID" "Search Index Data Contributor" \
+    "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
+    "Search Index Data Contributor"
+  ensure_role_assignment "$USER_OBJECT_ID" "Search Service Contributor" \
+    "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
+    "Search Service Contributor"
+
+  # Cosmos DB data-plane access uses a SQL role assignment (separate from Azure RBAC).
+  # Built-in Data Contributor role ID: 00000000-0000-0000-0000-000000000002 (account-level scope).
+  COSMOS_ACCOUNT_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.DocumentDB/databaseAccounts/$COSMOS_ACCOUNT_NAME"
+  if [ "$(az cosmosdb sql role assignment list --account-name "$COSMOS_ACCOUNT_NAME" --resource-group "$RESOURCE_GROUP" --query "length([?principalId=='$USER_OBJECT_ID'])" -o tsv 2>/dev/null || echo 0)" != "0" ]; then
+    log_success "   ✓ Cosmos DB SQL Data Contributor already assigned"
   else
-    # Public access already enabled - ensure developer IP is in the firewall
-    DEV_IP=$(curl -s https://api.ipify.org 2>/dev/null || echo "")
-    if [ -n "$DEV_IP" ]; then
-      EXISTING_IPS=$(az cosmosdb show --name $COSMOS_ACCOUNT_NAME --resource-group $RESOURCE_GROUP --query "ipRules[].ipAddressOrRange" -o tsv 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-      if ! echo "$EXISTING_IPS" | grep -q "$DEV_IP"; then
-        echo "   Adding developer IP $DEV_IP to Cosmos DB firewall..."
-        if [ -n "$EXISTING_IPS" ]; then
-          NEW_IPS="${EXISTING_IPS},${DEV_IP}"
-        else
-          NEW_IPS="$DEV_IP"
-        fi
-        az cosmosdb update \
-          --name $COSMOS_ACCOUNT_NAME \
-          --resource-group $RESOURCE_GROUP \
-          --ip-range-filter "$NEW_IPS" \
-          --output none 2>/dev/null || log_warning "Could not update Cosmos DB firewall"
-      fi
-    fi
+    echo "   Assigning Cosmos DB SQL Role (Data Contributor) at account level..."
+    az cosmosdb sql role assignment create \
+      --account-name "$COSMOS_ACCOUNT_NAME" \
+      --resource-group "$RESOURCE_GROUP" \
+      --role-definition-id "00000000-0000-0000-0000-000000000002" \
+      --principal-id "$USER_OBJECT_ID" \
+      --scope "$COSMOS_ACCOUNT_ID" \
+      --output none 2>/dev/null || log_warning "Cosmos DB role may already exist"
   fi
 
   log_success "User role assignments complete"
 fi
 
-# Assign RBAC roles to Foundry managed identities for AI Search access
-log_step "Assigning roles to Foundry managed identities..."
+echo "   Configuring Cosmos DB network access..."
+# Cosmos DB uses Azure AD / RBAC only (local auth disabled). The dev machine's
+# Azure-bound traffic egresses through a rotating pool of tunnel IPs (corpnet /
+# Entra Global Secure Access), so IP whitelisting is unreliable. Open the account
+# to all networks and let RBAC (DefaultAzureCredential + the Cosmos DB Built-in
+# Data Contributor role assigned above) enforce access. The update is slow
+# (~1-2 min), so skip it when the account is already open.
+COSMOS_NET=$(az cosmosdb show --name "$COSMOS_ACCOUNT_NAME" --resource-group "$RESOURCE_GROUP" --query "{pna:publicNetworkAccess, ipCount:length(ipRules)}" -o json 2>/dev/null || echo '{}')
+CURRENT_PNA=$(jq -r '.pna // ""' <<< "$COSMOS_NET")
+CURRENT_IP_COUNT=$(jq -r '.ipCount // 0' <<< "$COSMOS_NET")
 
-# Hub (AI Services) managed identity
+if [ "$CURRENT_PNA" = "Enabled" ] && [ "$CURRENT_IP_COUNT" = "0" ]; then
+  log_success "   ✓ Cosmos DB already open to all networks (RBAC-enforced) — skipping slow update"
+else
+  echo "   Opening Cosmos DB to all networks (access enforced by Azure AD RBAC)..."
+  az cosmosdb update \
+    --name "$COSMOS_ACCOUNT_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --public-network-access ENABLED \
+    --ip-range-filter "" \
+    --output none
+  log_success "   ✓ Cosmos DB open to all networks; access controlled by Azure AD RBAC"
+fi
+
+log_step "Assigning roles to Foundry managed identities..."
 MANAGED_IDENTITY_ID=$(az cognitiveservices account show \
-  --name $AI_SERVICES_NAME \
-  --resource-group $RESOURCE_GROUP \
-  --query identity.principalId -o tsv 2>/dev/null)
+  --name "$AI_SERVICES_NAME" \
+  --resource-group "$RESOURCE_GROUP" \
+  --query identity.principalId -o tsv 2>/dev/null || true)
 
 if [ -n "$MANAGED_IDENTITY_ID" ]; then
   echo "   Hub Managed Identity: $MANAGED_IDENTITY_ID"
-  
-  echo "   Assigning Search Index Data Contributor to hub identity..."
-  az role assignment create \
-    --assignee $MANAGED_IDENTITY_ID \
-    --role "Search Index Data Contributor" \
-    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
-    --output none 2>/dev/null || true
-  
-  echo "   Assigning Search Service Contributor to hub identity..."
-  az role assignment create \
-    --assignee $MANAGED_IDENTITY_ID \
-    --role "Search Service Contributor" \
-    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
-    --output none 2>/dev/null || true
-  
+  ensure_role_assignment "$MANAGED_IDENTITY_ID" "Search Index Data Contributor" \
+    "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
+    "Hub → Search Index Data Contributor"
+  ensure_role_assignment "$MANAGED_IDENTITY_ID" "Search Service Contributor" \
+    "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
+    "Hub → Search Service Contributor"
   log_success "Hub identity role assignments complete"
 else
   log_warning "Could not get Foundry hub managed identity for role assignments"
 fi
 
-# Project managed identity (agents run with this identity)
 AI_PROJECT_NAME="${AI_PROJECT_NAME:-${BASE_NAME}-project}"
 PROJECT_IDENTITY_ID=$(az ad sp list \
   --display-name "${AI_SERVICES_NAME}/projects/${AI_PROJECT_NAME}" \
-  --query "[0].id" -o tsv 2>/dev/null)
+  --query "[0].id" -o tsv 2>/dev/null || true)
 
 if [ -n "$PROJECT_IDENTITY_ID" ]; then
   echo "   Project Managed Identity: $PROJECT_IDENTITY_ID"
-  
-  echo "   Assigning Search Index Data Contributor to project identity..."
-  az role assignment create \
-    --assignee $PROJECT_IDENTITY_ID \
-    --role "Search Index Data Contributor" \
-    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
-    --output none 2>/dev/null || true
-  
-  echo "   Assigning Search Service Contributor to project identity..."
-  az role assignment create \
-    --assignee $PROJECT_IDENTITY_ID \
-    --role "Search Service Contributor" \
-    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
-    --output none 2>/dev/null || true
-  
+  ensure_role_assignment "$PROJECT_IDENTITY_ID" "Search Index Data Contributor" \
+    "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
+    "Project → Search Index Data Contributor"
+  ensure_role_assignment "$PROJECT_IDENTITY_ID" "Search Service Contributor" \
+    "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Search/searchServices/$SEARCH_SERVICE_NAME" \
+    "Project → Search Service Contributor"
   log_success "Project identity role assignments complete"
 else
   log_warning "Could not get Foundry project managed identity for role assignments"
-  log_warning "You may need to manually assign Search roles to the project identity"
 fi
 
-# Configure storage account network access
 log_step "Configuring storage account network access..."
-echo "   Enabling public network access (required for development)"
-az storage account update \
-  --name $STORAGE_NAME \
-  --resource-group $RESOURCE_GROUP \
-  --public-network-access Enabled \
-  --output none
-
-log_success "Storage account configured for secure access"
+STORAGE_PNA=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RESOURCE_GROUP" --query publicNetworkAccess -o tsv 2>/dev/null || echo "")
+if [ "$STORAGE_PNA" = "Enabled" ]; then
+  log_success "Storage account public network access already enabled"
+else
+  az storage account update \
+    --name "$STORAGE_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --public-network-access Enabled \
+    --output none
+  log_success "Storage account configured for development access"
+fi
 
 # Create .env file
 ENV_FILE="$PROJECT_DIR/backend/.env"
@@ -358,6 +376,11 @@ log_step "Creating $ENV_FILE..."
   echo "FLASK_ENV=development"
   echo "FLASK_DEBUG=true"
 } > "$ENV_FILE"
+
+if [ ! -s "$ENV_FILE" ] || ! grep -q '^AZURE_COSMOS_ENDPOINT=https://' "$ENV_FILE"; then
+  log_error "Environment file was not created correctly: $ENV_FILE"
+  exit 1
+fi
 
 log_success "Environment file created"
 echo ""
@@ -411,13 +434,21 @@ fi
 log_step "Activating venv and installing dependencies..."
 source "$PROJECT_DIR/backend/venv/bin/activate"
 
-# Install core requirements first (fast)
-log_step "Installing core Python packages..."
-pip install -q -r "$PROJECT_DIR/backend/requirements.txt"
+# Install core requirements only if they're missing (skips a slow pip re-resolve)
+if python -c "import flask, azure.storage.blob, azure.cosmos, openai, azure.ai.formrecognizer, dotenv" &>/dev/null; then
+    log_success "Core Python packages already installed"
+else
+    log_step "Installing core Python packages..."
+    pip install -q -r "$PROJECT_DIR/backend/requirements.txt"
+fi
 
-# Install Azure AI Search SDK
-log_step "Installing Azure AI Search SDK..."
-pip install -q azure-search-documents azure-identity
+# Install Azure AI Search SDK only if missing
+if python -c "import azure.search.documents, azure.identity" &>/dev/null; then
+    log_success "Azure AI Search SDK already installed"
+else
+    log_step "Installing Azure AI Search SDK..."
+    pip install -q azure-search-documents azure-identity
+fi
 
 log_success "Packages installed"
 
@@ -568,35 +599,18 @@ else
         echo "   Registering Microsoft.Bing provider..."
         az provider register --namespace Microsoft.Bing --wait --output none 2>/dev/null || true
     fi
-    
-    # Accept marketplace terms for Bing Grounding (required for automated creation)
-    # This is idempotent - safe to run even if already accepted
-    echo "   Accepting Bing Grounding marketplace terms..."
-    az term accept \
-      --publisher "microsoft" \
-      --product "bing-search-api" \
-      --plan "bing-grounding-free" \
-      --output none 2>/dev/null || true
-    
-    # Create Bing Grounding resource
-    if az resource create \
-      --name $BING_RESOURCE_NAME \
-      --resource-group $RESOURCE_GROUP \
-      --resource-type "Microsoft.Bing/accounts" \
-      --location "global" \
-      --properties '{"kind": "Bing.Grounding.Search"}' \
+
+    # Create the Bing Grounding resource via ARM REST. kind/sku are top-level
+    # fields (az resource create can't set them), and no marketplace-terms
+    # acceptance is required. PUT is idempotent, so re-runs are safe.
+    if az rest --method put \
+      --url "https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Bing/accounts/${BING_RESOURCE_NAME}?api-version=2020-06-10" \
+      --body '{"location":"global","sku":{"name":"G1"},"kind":"Bing.Grounding","properties":{}}' \
       --output none 2>/dev/null; then
         log_success "Bing Grounding resource created: $BING_RESOURCE_NAME"
     else
-        log_warning "Could not create Bing Grounding resource."
-        log_warning "This usually means marketplace terms need manual acceptance."
-        log_warning "To fix this:"
-        log_warning "  1. Go to Azure Portal → Marketplace"
-        log_warning "  2. Search for 'Grounding with Bing Search'"
-        log_warning "  3. Click Create, accept terms, then cancel (or complete creation)"
-        log_warning "  4. Re-run this script"
-        log_warning ""
-        log_warning "Or create manually with name: ${BING_RESOURCE_NAME}"
+        log_warning "Could not create Bing Grounding resource: ${BING_RESOURCE_NAME}"
+        log_warning "Verify the Microsoft.Bing provider is registered and you have Contributor on the resource group."
     fi
 fi
 
@@ -608,35 +622,30 @@ BING_API_KEY=""
 BING_RG="${BING_RESOURCE_GROUP:-$RESOURCE_GROUP}"
 
 if [ -n "$EXISTING_BING_NAME" ] || az resource show --name $BING_RESOURCE_NAME --resource-group $BING_RG --resource-type "Microsoft.Bing/accounts" &>/dev/null; then
-    # Get the Bing API key
-    BING_API_KEY=$(az resource invoke-action \
-      --name $BING_RESOURCE_NAME \
-      --resource-group $BING_RG \
-      --resource-type "Microsoft.Bing/accounts" \
-      --action listKeys \
+    # Get the Bing API key (the generic invoke-action returns {}; the listKeys
+    # REST endpoint is the reliable way to fetch the key).
+    BING_API_KEY=$(az rest --method post \
+      --url "https://management.azure.com/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${BING_RG}/providers/Microsoft.Bing/accounts/${BING_RESOURCE_NAME}/listKeys?api-version=2020-06-10" \
       --query "key1" -o tsv 2>/dev/null || echo "")
     
     if [ -n "$BING_API_KEY" ]; then
         log_step "Creating Bing Grounding connection..."
-        # Create Bing connection on the Foundry resource using API key auth
+        # A Bing Grounding connection uses category "ApiKey" plus the
+        # bing_grounding metadata; category "BingGrounding" is rejected with a
+        # deserialization error. Use a file body to avoid shell-escaping issues.
+        BING_CONN_BODY=$(mktemp)
+        cat > "$BING_CONN_BODY" <<EOF
+{"properties":{"category":"ApiKey","target":"https://api.bing.microsoft.com/","authType":"ApiKey","credentials":{"key":"${BING_API_KEY}"},"metadata":{"type":"bing_grounding","ApiType":"Azure"},"isSharedToAll":true}}
+EOF
         if az rest --method put \
           --url "https://management.azure.com/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.CognitiveServices/accounts/${AI_HUB_NAME}/connections/${BING_CONNECTION_NAME}?api-version=2025-06-01" \
-          --body "{
-            \"properties\": {
-              \"category\": \"BingGrounding\",
-              \"target\": \"https://api.bing.microsoft.com\",
-              \"authType\": \"ApiKey\",
-              \"credentials\": {
-                \"key\": \"${BING_API_KEY}\"
-              },
-              \"isSharedToAll\": true
-            }
-          }" \
+          --body "@$BING_CONN_BODY" \
           --output none 2>/dev/null; then
             log_success "Bing Grounding connection created: $BING_CONNECTION_NAME"
         else
             log_warning "Could not create Bing Grounding connection automatically."
         fi
+        rm -f "$BING_CONN_BODY"
     else
         log_warning "Could not retrieve Bing API key for connection."
     fi
@@ -671,7 +680,7 @@ try:
                 break
 except Exception as e:
     pass
-" 2>/dev/null)
+" 2>/dev/null || true)
 
 if [ -n "$EXISTING_BING_CONNECTION" ]; then
     BING_CONNECTION_NAME="$EXISTING_BING_CONNECTION"

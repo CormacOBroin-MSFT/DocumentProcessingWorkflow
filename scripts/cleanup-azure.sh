@@ -20,6 +20,11 @@ if ! az group show --name $RESOURCE_GROUP &>/dev/null; then
     exit 0
 fi
 
+AI_LOCATION=$(az cognitiveservices account show \
+    --name "$AI_SERVICES_NAME" \
+    --resource-group "$RESOURCE_GROUP" \
+    --query location -o tsv 2>/dev/null || true)
+
 echo "⚠️  This will DELETE all resources in '$RESOURCE_GROUP':"
 echo "   • Storage Account"
 echo "   • AI Services (Content Understanding)"
@@ -37,12 +42,13 @@ echo ""
 echo "🗑️  Deleting resource group '$RESOURCE_GROUP'..."
 az group delete --name $RESOURCE_GROUP --yes
 
-# Purge AI Services to avoid soft-delete issues on next deploy
-echo "🧹 Purging AI Services (avoiding soft-delete)..."
-az cognitiveservices account purge \
-    --name $AI_SERVICES_NAME \
-    --resource-group $RESOURCE_GROUP \
-    --location $LOCATION 2>/dev/null || true
+if [ -n "$AI_LOCATION" ]; then
+    echo "🧹 Purging AI Services (avoiding soft-delete)..."
+    az cognitiveservices account purge \
+        --name "$AI_SERVICES_NAME" \
+        --resource-group "$RESOURCE_GROUP" \
+        --location "$AI_LOCATION"
+fi
 
 echo ""
 echo "✅ Cleanup complete!"
