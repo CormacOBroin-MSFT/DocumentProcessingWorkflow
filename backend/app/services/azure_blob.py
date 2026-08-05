@@ -38,12 +38,14 @@ class AzureBlobService:
         self._ensure_container_exists()
     
     def _get_account_name(self) -> Optional[str]:
-        """Extract storage account name from connection string"""
+        """Resolve the storage account name (RBAC auth needs only the name)"""
+        if config.AZURE_STORAGE_ACCOUNT_NAME:
+            return config.AZURE_STORAGE_ACCOUNT_NAME
+
+        # Legacy fallback: parse AccountName from a connection string
         conn_str = config.AZURE_STORAGE_CONNECTION_STRING
         if not conn_str:
             return None
-        
-        # Parse AccountName from connection string
         match = re.search(r'AccountName=([^;]+)', conn_str)
         if match:
             return match.group(1)

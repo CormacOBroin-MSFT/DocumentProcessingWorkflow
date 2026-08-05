@@ -66,14 +66,10 @@ resource appService 'Microsoft.Web/sites@2023-01-01' = {
       linuxFxVersion: 'PYTHON|3.11'
       appCommandLine: 'gunicorn --bind 0.0.0.0:8000 --access-logfile - --error-logfile - --log-level info --capture-output run:app'
       appSettings: [
-        // Storage
+        // Storage (RBAC via managed identity - only the account name is needed)
         {
           name: 'AZURE_STORAGE_ACCOUNT_NAME'
           value: storageAccount.name
-        }
-        {
-          name: 'AZURE_STORAGE_CONNECTION_STRING'
-          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${storageAccount.listKeys().keys[0].value}'
         }
         {
           name: 'AZURE_STORAGE_CONTAINER'

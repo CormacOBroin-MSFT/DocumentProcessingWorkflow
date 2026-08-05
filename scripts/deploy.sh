@@ -202,39 +202,24 @@ az cosmosdb sql role assignment create \
 log_success "Cosmos DB role assigned"
 echo ""
 
-log_step "Allowing App Service outbound addresses through the Cosmos DB firewall..."
-APP_OUTBOUND_IPS=$(az webapp show \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$APP_NAME" \
-    --query outboundIpAddresses -o tsv)
-DEV_IP=$(curl --fail --silent --show-error https://api4.ipify.org)
-if [[ ! "$DEV_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-    log_error "Could not detect a valid developer public IP"
-    exit 1
-fi
-EXISTING_COSMOS_IPS=$(az cosmosdb show \
-    --name "$COSMOS_ACCOUNT_NAME" \
-    --resource-group "$RESOURCE_GROUP" \
-    --query "ipRules[].ipAddressOrRange" -o tsv | tr '\n' ',')
-COSMOS_IPS=$(printf '%s,%s' "$DEV_IP" "$APP_OUTBOUND_IPS" | tr ',' '\n' | sed '/^$/d' | awk '!seen[$0]++' | paste -sd, -)
-NORMALIZED_EXISTING_IPS=$(printf '%s' "$EXISTING_COSMOS_IPS" | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)
-NORMALIZED_COSMOS_IPS=$(printf '%s' "$COSMOS_IPS" | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)
-
-if [ -z "$COSMOS_IPS" ]; then
-    log_error "Could not determine any Cosmos DB firewall addresses"
-    exit 1
-fi
-
-if [ "$NORMALIZED_EXISTING_IPS" = "$NORMALIZED_COSMOS_IPS" ]; then
-    log_success "Cosmos DB firewall already includes App Service outbound addresses"
+log_step "Configuring Cosmos DB network access..."
+# The App Service authenticates to Cosmos with its managed identity (the SQL
+# Data Contributor role assigned above), so access is enforced by Azure AD RBAC
+# rather than IP rules. Keep the account open to all networks (matching
+# setup-azure.sh) instead of re-locking it to a rotating set of egress IPs.
+COSMOS_NET=$(az cosmosdb show --name "$COSMOS_ACCOUNT_NAME" --resource-group "$RESOURCE_GROUP" --query "{pna:publicNetworkAccess, ipCount:length(ipRules)}" -o json)
+CURRENT_PNA=$(jq -r '.pna // ""' <<< "$COSMOS_NET")
+CURRENT_IP_COUNT=$(jq -r '.ipCount // 0' <<< "$COSMOS_NET")
+if [ "$CURRENT_PNA" = "Enabled" ] && [ "$CURRENT_IP_COUNT" = "0" ]; then
+    log_success "Cosmos DB already open to all networks (RBAC-enforced)"
 else
     az cosmosdb update \
         --name "$COSMOS_ACCOUNT_NAME" \
         --resource-group "$RESOURCE_GROUP" \
         --public-network-access ENABLED \
-        --ip-range-filter "$COSMOS_IPS" \
+        --ip-range-filter "" \
         --output none
-    log_success "Cosmos DB firewall includes App Service outbound addresses"
+    log_success "Cosmos DB open to all networks; access controlled by Azure AD RBAC"
 fi
 echo ""
 

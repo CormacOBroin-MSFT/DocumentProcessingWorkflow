@@ -6,6 +6,9 @@ import os
 from typing import Optional
 
 class Config:
+    # Storage uses Azure AD / RBAC (DefaultAzureCredential); only the account name
+    # is needed. AZURE_STORAGE_CONNECTION_STRING is kept as a legacy fallback.
+    AZURE_STORAGE_ACCOUNT_NAME: Optional[str] = os.getenv('AZURE_STORAGE_ACCOUNT_NAME')
     AZURE_STORAGE_CONNECTION_STRING: Optional[str] = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
     AZURE_STORAGE_CONTAINER: str = os.getenv('AZURE_STORAGE_CONTAINER', 'customs-documents')
     
@@ -31,10 +34,15 @@ class Config:
     FLASK_DEBUG: bool = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     
     @classmethod
+    def is_storage_configured(cls) -> bool:
+        """Check if Azure Storage is configured (RBAC needs only the account name)"""
+        return bool(cls.AZURE_STORAGE_ACCOUNT_NAME or cls.AZURE_STORAGE_CONNECTION_STRING)
+
+    @classmethod
     def is_azure_configured(cls) -> bool:
         """Check if Azure services are properly configured"""
         return bool(
-            cls.AZURE_STORAGE_CONNECTION_STRING and
+            cls.is_storage_configured() and
             (cls.AZURE_CONTENT_UNDERSTANDING_ENDPOINT or cls.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT)
         )
     

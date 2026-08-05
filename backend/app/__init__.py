@@ -74,7 +74,7 @@ def create_app():
     
     # Log configuration status
     from app.config import config
-    logger.info(f"Azure Storage configured: {bool(config.AZURE_STORAGE_CONNECTION_STRING)}")
+    logger.info(f"Azure Storage configured: {config.is_storage_configured()}")
     logger.info(f"Content Understanding configured: {bool(config.AZURE_CONTENT_UNDERSTANDING_ENDPOINT)}")
     logger.info(f"Document Intelligence configured: {bool(config.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT)}")
     logger.info(f"OCR Service: {config.get_ocr_service_type()}")
@@ -126,7 +126,7 @@ def create_app():
             'openaiConfigured': config.is_openai_configured(),
             'cosmosConfigured': config.is_cosmos_configured(),
             'services': {
-                'storage': bool(config.AZURE_STORAGE_CONNECTION_STRING),
+                'storage': config.is_storage_configured(),
                 'documentIntelligence': bool(config.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT),
                 'openai': bool(config.AZURE_OPENAI_ENDPOINT),
                 'cosmosdb': bool(config.AZURE_COSMOS_ENDPOINT)

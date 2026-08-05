@@ -216,12 +216,6 @@ echo ""
 log_step "Setting up role assignments..."
 USER_OBJECT_ID=$(az ad signed-in-user show --query id -o tsv 2>/dev/null || echo "")
 
-log_step "Getting storage connection string..."
-STORAGE_CONNECTION_STRING=$(az storage account show-connection-string \
-  --name $STORAGE_NAME \
-  --resource-group $RESOURCE_GROUP \
-  --query connectionString -o tsv)
-
 # Helper: create a role assignment only if it isn't already present (skips slow no-op writes)
 ensure_role_assignment() {
   # $1=assignee  $2=role  $3=scope  $4=label
@@ -351,8 +345,8 @@ log_step "Creating $ENV_FILE..."
 
 # Write .env file line by line to avoid formatting issues with long values
 {
-  echo "# Azure Storage"
-  printf '%s\n' "AZURE_STORAGE_CONNECTION_STRING=${STORAGE_CONNECTION_STRING}"
+  echo "# Azure Storage (uses Azure CLI credentials / RBAC - only the account name is needed)"
+  printf '%s\n' "AZURE_STORAGE_ACCOUNT_NAME=${STORAGE_NAME}"
   echo "AZURE_STORAGE_CONTAINER=customs-documents"
   echo ""
   echo "# Azure Content Understanding (uses Azure CLI credentials)"
