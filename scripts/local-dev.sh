@@ -132,8 +132,9 @@ for ((attempt = 1; attempt <= 30; attempt++)); do
     sleep 1
 done
 
-# Check if npm dependencies are installed
-if [ ! -d "node_modules" ]; then
+# Install npm dependencies if missing or incomplete (a partial node_modules
+# directory would otherwise pass a bare directory check but lack the vite binary)
+if [ ! -x "node_modules/.bin/vite" ]; then
     echo "📦 Installing npm dependencies..."
     npm ci
 fi
