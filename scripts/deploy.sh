@@ -223,6 +223,27 @@ else
 fi
 echo ""
 
+log_step "Configuring storage account network access..."
+# The App Service reaches Blob Storage with its managed identity (Storage Blob
+# Data Contributor). Ensure the public endpoint is reachable AND the default
+# network action is Allow; access is still enforced by Azure AD RBAC (shared-key
+# auth is disabled). Both must hold to avoid a 403 AuthorizationFailure.
+STORAGE_NET=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RESOURCE_GROUP" --query "{pna:publicNetworkAccess, defaultAction:networkRuleSet.defaultAction}" -o json 2>/dev/null || echo '{}')
+STORAGE_PNA=$(jq -r '.pna // ""' <<< "$STORAGE_NET")
+STORAGE_DEFAULT_ACTION=$(jq -r '.defaultAction // ""' <<< "$STORAGE_NET")
+if [ "$STORAGE_PNA" = "Enabled" ] && [ "$STORAGE_DEFAULT_ACTION" = "Allow" ]; then
+    log_success "Storage account already reachable (public access enabled, default action Allow)"
+else
+    az storage account update \
+        --name "$STORAGE_NAME" \
+        --resource-group "$RESOURCE_GROUP" \
+        --public-network-access Enabled \
+        --default-action Allow \
+        --output none
+    log_success "Storage account configured for access; enforced by Azure AD RBAC"
+fi
+echo ""
+
 # Build the application
 log_step "Building frontend..."
 npm ci --silent

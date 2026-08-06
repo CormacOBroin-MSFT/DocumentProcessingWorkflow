@@ -33,7 +33,9 @@ export const COMPLIANCE = {
 
 // API configuration
 export const API_CONFIG = {
-    BASE_URL: import.meta.env.VITE_API_URL || 'http://localhost:5000',
+    // In production the Flask backend serves this bundle from the same origin, so
+    // default to a relative URL. Only local dev (Vite on :5173) needs :5000.
+    BASE_URL: import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? '' : 'http://localhost:5000'),
     MAX_FILE_SIZE: 16 * 1024 * 1024, // 16MB
     ACCEPTED_FILE_TYPES: ['image/png', 'image/jpeg', 'image/jpg', 'application/pdf'],
 } as const

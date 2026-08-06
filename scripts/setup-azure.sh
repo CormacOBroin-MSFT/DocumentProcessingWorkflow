@@ -327,16 +327,24 @@ else
 fi
 
 log_step "Configuring storage account network access..."
-STORAGE_PNA=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RESOURCE_GROUP" --query publicNetworkAccess -o tsv 2>/dev/null || echo "")
-if [ "$STORAGE_PNA" = "Enabled" ]; then
-  log_success "Storage account public network access already enabled"
+# The dev machine egresses through rotating tunnel IPs (corpnet / Entra Global
+# Secure Access), so IP whitelisting is unreliable. Ensure the public endpoint is
+# reachable AND the default network action is Allow; access is still enforced by
+# Azure AD RBAC (shared-key auth is disabled on the account). Checking both guards
+# against a 403 AuthorizationFailure when only one of the two is misconfigured.
+STORAGE_NET=$(az storage account show --name "$STORAGE_NAME" --resource-group "$RESOURCE_GROUP" --query "{pna:publicNetworkAccess, defaultAction:networkRuleSet.defaultAction}" -o json 2>/dev/null || echo '{}')
+STORAGE_PNA=$(jq -r '.pna // ""' <<< "$STORAGE_NET")
+STORAGE_DEFAULT_ACTION=$(jq -r '.defaultAction // ""' <<< "$STORAGE_NET")
+if [ "$STORAGE_PNA" = "Enabled" ] && [ "$STORAGE_DEFAULT_ACTION" = "Allow" ]; then
+  log_success "Storage account already reachable (public access enabled, default action Allow)"
 else
   az storage account update \
     --name "$STORAGE_NAME" \
     --resource-group "$RESOURCE_GROUP" \
     --public-network-access Enabled \
+    --default-action Allow \
     --output none
-  log_success "Storage account configured for development access"
+  log_success "Storage account configured for development access (public access enabled, default action Allow)"
 fi
 
 # Create .env file
